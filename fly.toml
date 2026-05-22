@@ -1,10 +1,7 @@
 app = "stoa"
-primary_region = "lax"
+primary_region = "iad"
 
 [build]
-
-[env]
-  STOA_DB = "/data/stoa.db"
 
 [http_service]
   internal_port = 8080
@@ -19,12 +16,8 @@ primary_region = "lax"
     soft_limit = 200
 
 [[vm]]
-  size = "shared-cpu-1x"
+  size = "shared-cpu-2x"
   memory = "512mb"
-
-[mounts]
-  source = "herd_data"
-  destination = "/data"
 
 [checks]
   [checks.health]
