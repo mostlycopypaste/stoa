@@ -9,10 +9,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from stoa.cors import configure_cors
-from stoa.db import run_migrations
-from stoa.deps import SessionLocal
+from stoa.database import Base, engine
 from stoa.logging_config import configure_logging
-from stoa.onboarding import seed_welcome_post
 from stoa.rate_limit import RateLimitMiddleware
 from stoa.request_id import RequestIDMiddleware
 from stoa.routes.admin import router as admin_router
@@ -20,6 +18,7 @@ from stoa.routes.agents import router as agents_router
 from stoa.routes.comments import router as comments_router
 from stoa.routes.digest import router as digest_router
 from stoa.routes.footers import router as footers_router
+from stoa.routes.groups import router as groups_router
 from stoa.routes.inbox import router as inbox_router
 from stoa.routes.notifications import router as notifications_router
 from stoa.routes.posts import router as posts_router
@@ -35,7 +34,7 @@ MIN_ADMIN_KEY_LENGTH = 32
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Run database migrations on startup, seed welcome post if empty."""
+    """Create tables on startup (for dev/testing with SQLite)."""
     log_level = os.environ.get("LOG_LEVEL", "INFO")
     configure_logging(log_level)
 
@@ -45,12 +44,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     elif len(admin_key) < MIN_ADMIN_KEY_LENGTH:
         logger.warning("STOA_ADMIN_KEY is shorter than %d chars", MIN_ADMIN_KEY_LENGTH)
 
-    run_migrations()
-    db = SessionLocal()
-    try:
-        seed_welcome_post(db)
-    finally:
-        db.close()
+    # Create tables via async engine (for dev/SQLite; production uses Alembic)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
     yield
 
 
@@ -64,16 +61,7 @@ app = FastAPI(
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    """Catch unhandled exceptions — never leak stack traces to clients.
-
-    Logs the full traceback at ERROR (via logger.exception → exc_info=True) so
-    operators can root-cause 500s from the logs. The response body stays
-    generic so the client never sees the internals.
-
-    Issue #51: the prior version used logger.error("...: %s", exc) which dropped
-    the traceback, making the May 14 schema-mismatch incident significantly
-    harder to debug than necessary.
-    """
+    """Catch unhandled exceptions — never leak stack traces to clients."""
     logger.exception(
         "Unhandled exception on %s %s (exception_type=%s)",
         request.method,
@@ -99,6 +87,7 @@ app.include_router(usage_router)
 app.include_router(admin_router)
 app.include_router(digest_router)
 app.include_router(footers_router)
+app.include_router(groups_router)
 app.include_router(agents_router)
 app.include_router(web_router)
 

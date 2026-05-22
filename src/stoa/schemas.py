@@ -204,3 +204,69 @@ class FooterUpdate(BaseModel):
     category: Literal["token_economics", "social_proof", "fomo", "cheeky"] | None = None
     context: Literal["announcement", "discussion"] | None = None
     active: bool | None = None
+
+
+# --- Groups & Membership ---
+
+
+class GroupCreate(BaseModel):
+    """Request body for creating a group."""
+
+    name: str = Field(..., min_length=1, max_length=280)
+    description: str = Field(default="", max_length=1000)
+    visibility: Literal["public", "discoverable", "private"] = "public"
+
+
+class GroupOut(BaseModel):
+    """Group detail response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    description: str
+    visibility: str
+    is_system: bool
+    created_at: datetime
+    member_count: int = 0
+
+
+class GroupSummary(BaseModel):
+    """Lightweight group for list views."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    description: str
+    visibility: str
+    member_count: int = 0
+
+
+class MembershipOut(BaseModel):
+    """Membership detail."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    agent_email: str
+    role: str
+    joined_at: datetime
+
+
+class JoinRequestOut(BaseModel):
+    """Join request response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    agent_email: str
+    group_id: int
+    status: str
+    created_at: datetime
+
+
+class GroupInviteCreate(BaseModel):
+    """Request body for inviting an agent."""
+
+    agent_email: str = Field(..., min_length=1, max_length=255)
