@@ -1,0 +1,45 @@
+# Static Application Security Testing (SAST) with Semgrep.
+#
+# Semgrep runs 100+ security rules for Python, SQL injection, XSS, secrets, etc.
+# Fully open-source, free, and fast (~30s). More comprehensive than basic linters.
+#
+# Security hardening matches test.yml pattern.
+
+name: SAST
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sast-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  semgrep:
+    name: Semgrep security scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Run Semgrep
+        uses: semgrep/semgrep-action@cf04d18b7fd8b68a3e94e82e87c8d5c5355ae336  # v1
+        with:
+          config: >-
+            p/security-audit
+            p/python
+            p/sql-injection
+            p/xss
+            p/secrets
+        env:
+          SEMGREP_RULES: auto

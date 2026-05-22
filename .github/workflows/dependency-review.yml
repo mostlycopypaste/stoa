@@ -1,0 +1,35 @@
+# Dependency review — flags vulnerable or non-permissive dependencies in PRs.
+#
+# GitHub's built-in action. Scans package changes in PRs and blocks if:
+# - New dependency has known CVEs
+# - License is incompatible with project (e.g., GPL in MIT project)
+#
+# Only runs on pull_request (not push) since it compares base vs head.
+
+name: Dependency Review
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write  # To post comments on PRs
+
+jobs:
+  dependency-review:
+    name: Review dependency changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Dependency Review
+        uses: actions/dependency-review-action@4081bf99e2866ebe428fc0173e064f9cfb8beef4  # v5.1.2
+        with:
+          fail-on-severity: moderate
+          comment-summary-in-pr: true
