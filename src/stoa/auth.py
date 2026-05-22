@@ -1,41 +1,18 @@
-"""API key authentication dependency."""
+"""API key authentication dependency (async)."""
 
 import logging
-import sqlite3
 
 import bcrypt
 from fastapi import Depends, Header, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from stoa.db import get_db_path
-from stoa.deps import get_db
+from stoa.database import get_db
 from stoa.models import ApiKey
-from stoa.security import audit
 
 logger = logging.getLogger(__name__)
 
 DUMMY_HASH = bcrypt.hashpw(b"dummy-key-for-timing-safety", bcrypt.gensalt(rounds=12))
-
-
-def _get_audit_conn() -> sqlite3.Connection:
-    """Raw sqlite3 connection for audit logging (security.audit requires this)."""
-    path = get_db_path()
-    conn = sqlite3.connect(str(path))
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
-
-
-def _log_auth_failure() -> None:
-    """Best-effort audit log for failed auth attempts."""
-    try:
-        conn = _get_audit_conn()
-        try:
-            audit(conn, "auth_failure", agent_email=None, details={"reason": "invalid_api_key"})
-            conn.commit()
-        finally:
-            conn.close()
-    except Exception:
-        logger.warning("Failed to write auth_failure audit log")
 
 
 def _verify_key(api_key: str, key_record: ApiKey | None) -> bool:
@@ -59,52 +36,49 @@ def _verify_key(api_key: str, key_record: ApiKey | None) -> bool:
     return hmac.compare_digest(api_key, str(key_record.api_key))
 
 
-def get_current_agent(
-    x_api_key: str = Header(..., alias="X-API-Key"),
-    db: Session = Depends(get_db),
+async def get_current_agent(
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+    authorization: str | None = Header(default=None),
+    db: AsyncSession = Depends(get_db),
 ) -> str:
     """Validate API key and return the agent's email.
 
+    Accepts either X-API-Key header or Authorization: Bearer <key>.
     Raises HTTPException 401 if the key is missing or invalid.
+    Raises HTTPException 403 if the account is not verified.
     Uses constant-time comparison to prevent timing attacks.
     """
-    key_record: ApiKey | None = None
+    # Extract key from either header
+    api_key: str | None = None
+    if authorization and authorization.startswith("Bearer "):
+        api_key = authorization[7:]
+    elif x_api_key:
+        api_key = x_api_key
+
+    if not api_key:
+        raise HTTPException(status_code=401, detail="Missing API key")
 
     # Try hashed lookup first (prefix-based)
-    prefix = x_api_key[:8] if len(x_api_key) >= 8 else x_api_key
-    candidates = db.query(ApiKey).filter(ApiKey.api_key_prefix == prefix).all()
+    prefix = api_key[:8] if len(api_key) >= 8 else api_key
+    result = await db.execute(select(ApiKey).where(ApiKey.api_key_prefix == prefix))
+    candidates = result.scalars().all()
+
     for candidate in candidates:
-        if _verify_key(x_api_key, candidate):
-            agent_email = str(candidate.agent_email)
-            # Audit successful auth (best-effort, don't block on failure)
-            try:
-                conn = _get_audit_conn()
-                try:
-                    audit(conn, "auth_success", agent_email=agent_email)
-                    conn.commit()
-                finally:
-                    conn.close()
-            except Exception:
-                pass
-            return agent_email
+        if _verify_key(api_key, candidate):
+            if not candidate.is_verified:
+                raise HTTPException(status_code=403, detail="Account not verified")
+            return str(candidate.agent_email)
 
     # Fall back to legacy plaintext lookup
     if not candidates:
-        key_record = db.query(ApiKey).filter(ApiKey.api_key == x_api_key).first()
-        if _verify_key(x_api_key, key_record):
-            agent_email = str(key_record.agent_email)  # type: ignore[union-attr]
-            try:
-                conn = _get_audit_conn()
-                try:
-                    audit(conn, "auth_success", agent_email=agent_email)
-                    conn.commit()
-                finally:
-                    conn.close()
-            except Exception:
-                pass
-            return agent_email
+        result = await db.execute(select(ApiKey).where(ApiKey.api_key == api_key))
+        key_record = result.scalar_one_or_none()
+        if _verify_key(api_key, key_record):
+            if not key_record.is_verified:  # type: ignore[union-attr]
+                raise HTTPException(status_code=403, detail="Account not verified")
+            return str(key_record.agent_email)  # type: ignore[union-attr]
 
     # No match — run dummy comparison for timing safety
-    _verify_key(x_api_key, None)
-    _log_auth_failure()
+    _verify_key(api_key, None)
+    logger.warning("Auth failure: invalid API key (prefix=%s)", api_key[:4])
     raise HTTPException(status_code=401, detail="Invalid or missing API key")

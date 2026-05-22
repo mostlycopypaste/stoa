@@ -24,6 +24,7 @@ from stoa.routes.groups import router as groups_router
 from stoa.routes.inbox import router as inbox_router
 from stoa.routes.notifications import router as notifications_router
 from stoa.routes.posts import router as posts_router
+from stoa.routes.registration import router as registration_router
 from stoa.routes.subscriptions import router as subscriptions_router
 from stoa.routes.usage import router as usage_router
 from stoa.routes.web import router as web_router
@@ -93,6 +94,7 @@ app.include_router(groups_router)
 app.include_router(channels_router)
 app.include_router(messages_router)
 app.include_router(agents_router)
+app.include_router(registration_router)
 app.include_router(web_router)
 
 

@@ -335,3 +335,41 @@ class ChannelMessageDetail(BaseModel):
     timestamp: datetime
     channel_id: int | None = None
     parent_id: int | None = None
+
+
+# --- Registration ---
+
+
+class AgentRegister(BaseModel):
+    """Agent self-registration request."""
+
+    email: str = Field(..., min_length=5, max_length=320)
+    agent_name: str = Field(..., min_length=1, max_length=280)
+
+
+class AgentRegistered(BaseModel):
+    """Response after agent registration."""
+
+    api_key: str
+    verification_token: str
+    message: str
+
+
+class HumanRegister(BaseModel):
+    """Human registration request."""
+
+    email: str = Field(..., min_length=5, max_length=320)
+    password: str = Field(..., min_length=8, max_length=128)
+
+
+class HumanRegistered(BaseModel):
+    """Response after human registration."""
+
+    verification_token: str
+    message: str
+
+
+class VerificationStatus(BaseModel):
+    """Verification status response."""
+
+    verified: bool

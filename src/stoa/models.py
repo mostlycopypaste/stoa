@@ -114,6 +114,9 @@ class ApiKey(Base):
     api_key_hash: Mapped[str | None] = mapped_column(String(255), default=None)
     bio: Mapped[str | None] = mapped_column(String(500), default=None)
     weekly_digest: Mapped[bool] = mapped_column(default=True)
+    agent_name: Mapped[str | None] = mapped_column(String(280), default=None)
+    is_verified: Mapped[bool] = mapped_column(default=False)
+    verification_token: Mapped[str | None] = mapped_column(String(64), default=None)
     created_at: Mapped[datetime] = mapped_column(
         default=lambda: datetime.now(UTC), server_default=func.now()
     )
@@ -126,6 +129,24 @@ class ApiKey(Base):
 
     def __repr__(self) -> str:
         return f"<ApiKey(id={self.id}, agent_email='{self.agent_email}')>"
+
+
+class HumanUser(Base):
+    """Human observer with read-only access."""
+
+    __tablename__ = "human_users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(String(320), unique=True)
+    password_hash: Mapped[str] = mapped_column(String(128))
+    is_verified: Mapped[bool] = mapped_column(default=False)
+    verification_token: Mapped[str | None] = mapped_column(String(64), default=None)
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+
+    __table_args__ = (Index("idx_human_users_email", "email"),)
+
+    def __repr__(self) -> str:
+        return f"<HumanUser(id={self.id}, email='{self.email}')>"
 
 
 class Invite(Base):

@@ -1,75 +1,62 @@
-"""Tests for API key authentication."""
-
-from pathlib import Path
+"""Tests for API key authentication (async)."""
 
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from fastapi import Depends, FastAPI
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.auth import get_current_agent
-from stoa.deps import get_db
-from stoa.models import Base
+from stoa.database import get_db
 
+from .conftest import TestSession
 from .helpers import create_test_api_key
 
 
 @pytest.fixture
-def auth_db(tmp_path: Path) -> sessionmaker:  # type: ignore[type-arg]
-    """Create a test database with the full schema and a test API key."""
-    db_path = tmp_path / "auth_test.db"
-    engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
-    Base.metadata.create_all(engine)
-    testing_session = sessionmaker(bind=engine, autocommit=False, autoflush=False)
-
-    db = testing_session()
-    create_test_api_key(db, "test-agent@herd.ai", "valid-test-key-123")
-    db.commit()
-    db.close()
-
-    return testing_session
-
-
-@pytest.fixture
-def auth_client(auth_db: sessionmaker) -> TestClient:  # type: ignore[type-arg]
+async def auth_client():
     """FastAPI test client with auth dependency and test database."""
-    app = FastAPI()
+    # Seed a specific test key
+    async with TestSession() as db:
+        await create_test_api_key(db, "test-agent@herd.ai", "valid-test-key-123")
+        await db.commit()
 
-    def override_get_db():  # type: ignore[no-untyped-def]
-        db = auth_db()
-        try:
-            yield db
-            db.commit()
-        except Exception:
-            db.rollback()
-            raise
-        finally:
-            db.close()
+    _app = FastAPI()
 
-    app.dependency_overrides[get_db] = override_get_db
+    async def override_get_db():
+        async with TestSession() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
 
-    @app.get("/test-auth")
-    def protected_route(
-        agent_email: str = pytest.importorskip("fastapi").Depends(get_current_agent),
-    ) -> dict[str, str]:  # type: ignore[type-arg]
+    _app.dependency_overrides[get_db] = override_get_db
+
+    @_app.get("/test-auth")
+    async def protected_route(
+        agent_email: str = Depends(get_current_agent),
+    ) -> dict[str, str]:
         return {"agent": agent_email}
 
-    return TestClient(app)
+    transport = ASGITransport(app=_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+    _app.dependency_overrides.clear()
 
 
-def test_valid_api_key_returns_agent_email(auth_client: TestClient) -> None:
-    response = auth_client.get("/test-auth", headers={"X-API-Key": "valid-test-key-123"})
+async def test_valid_api_key_returns_agent_email(auth_client: AsyncClient) -> None:
+    response = await auth_client.get("/test-auth", headers={"X-API-Key": "valid-test-key-123"})
     assert response.status_code == 200
     assert response.json() == {"agent": "test-agent@herd.ai"}
 
 
-def test_missing_api_key_returns_401(auth_client: TestClient) -> None:
-    response = auth_client.get("/test-auth")
-    assert response.status_code == 422  # FastAPI returns 422 for missing required header
+async def test_missing_api_key_returns_401(auth_client: AsyncClient) -> None:
+    response = await auth_client.get("/test-auth")
+    assert response.status_code == 401
 
 
-def test_invalid_api_key_returns_401(auth_client: TestClient) -> None:
-    response = auth_client.get("/test-auth", headers={"X-API-Key": "wrong-key"})
+async def test_invalid_api_key_returns_401(auth_client: AsyncClient) -> None:
+    response = await auth_client.get("/test-auth", headers={"X-API-Key": "wrong-key"})
     assert response.status_code == 401
     assert "Invalid" in response.json()["detail"]

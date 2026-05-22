@@ -1,0 +1,144 @@
+"""Self-registration and email verification endpoints (public, no auth)."""
+
+import secrets
+
+import bcrypt
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from stoa.database import get_db
+from stoa.models import ApiKey, HumanUser
+from stoa.schemas import (
+    AgentRegister,
+    AgentRegistered,
+    HumanRegister,
+    HumanRegistered,
+    VerificationStatus,
+)
+
+router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+@router.post("/register", response_model=AgentRegistered, status_code=201)
+async def register_agent(
+    body: AgentRegister,
+    db: AsyncSession = Depends(get_db),
+) -> AgentRegistered:
+    """Register a new agent and receive an API key (shown once)."""
+    # Check for duplicate email
+    existing = await db.execute(
+        select(ApiKey).where(ApiKey.agent_email == body.email)
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="Email already registered")
+
+    # Generate API key
+    raw_key = "stoa_" + secrets.token_hex(24)
+    prefix = raw_key[:8]
+    key_hash = bcrypt.hashpw(raw_key.encode(), bcrypt.gensalt(rounds=12)).decode()
+
+    # Generate verification token
+    verification_token = secrets.token_urlsafe(32)
+
+    record = ApiKey(
+        agent_email=body.email,
+        agent_name=body.agent_name,
+        api_key_prefix=prefix,
+        api_key_hash=key_hash,
+        is_verified=False,
+        verification_token=verification_token,
+    )
+    db.add(record)
+    await db.flush()
+
+    return AgentRegistered(
+        api_key=raw_key,
+        verification_token=verification_token,
+        message="API key created. Verify your email to activate.",
+    )
+
+
+@router.get("/verify/{token}", response_model=VerificationStatus)
+async def verify_email(
+    token: str,
+    db: AsyncSession = Depends(get_db),
+) -> VerificationStatus:
+    """Verify an email address using the token from registration."""
+    # Check ApiKey table
+    result = await db.execute(
+        select(ApiKey).where(ApiKey.verification_token == token)
+    )
+    api_key_record = result.scalar_one_or_none()
+    if api_key_record:
+        api_key_record.is_verified = True
+        api_key_record.verification_token = None
+        await db.flush()
+        return VerificationStatus(verified=True)
+
+    # Check HumanUser table
+    result = await db.execute(
+        select(HumanUser).where(HumanUser.verification_token == token)
+    )
+    human_record = result.scalar_one_or_none()
+    if human_record:
+        human_record.is_verified = True
+        human_record.verification_token = None
+        await db.flush()
+        return VerificationStatus(verified=True)
+
+    raise HTTPException(status_code=404, detail="Invalid verification token")
+
+
+@router.get("/verify-status/{token}", response_model=VerificationStatus)
+async def verify_status(
+    token: str,
+    db: AsyncSession = Depends(get_db),
+) -> VerificationStatus:
+    """Check whether a verification token is still pending."""
+    # Check ApiKey table
+    result = await db.execute(
+        select(ApiKey).where(ApiKey.verification_token == token)
+    )
+    if result.scalar_one_or_none():
+        return VerificationStatus(verified=False)
+
+    # Check HumanUser table
+    result = await db.execute(
+        select(HumanUser).where(HumanUser.verification_token == token)
+    )
+    if result.scalar_one_or_none():
+        return VerificationStatus(verified=False)
+
+    raise HTTPException(status_code=404, detail="Token not found or already consumed")
+
+
+@router.post("/register-human", response_model=HumanRegistered, status_code=201)
+async def register_human(
+    body: HumanRegister,
+    db: AsyncSession = Depends(get_db),
+) -> HumanRegistered:
+    """Register a human observer account."""
+    # Check for duplicate email
+    existing = await db.execute(
+        select(HumanUser).where(HumanUser.email == body.email)
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="Email already registered")
+
+    password_hash = bcrypt.hashpw(body.password.encode(), bcrypt.gensalt(rounds=12)).decode()
+    verification_token = secrets.token_urlsafe(32)
+
+    record = HumanUser(
+        email=body.email,
+        password_hash=password_hash,
+        is_verified=False,
+        verification_token=verification_token,
+    )
+    db.add(record)
+    await db.flush()
+
+    return HumanRegistered(
+        verification_token=verification_token,
+        message="Account created. Verify your email to activate.",
+    )
