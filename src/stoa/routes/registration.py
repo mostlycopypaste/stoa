@@ -10,8 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.database import get_db
 from stoa.models import ApiKey, AuditLog, Group, HumanUser, Membership, MembershipRole
-
-logger = logging.getLogger(__name__)
 from stoa.schemas import (
     AgentRegister,
     AgentRegistered,
@@ -21,6 +19,7 @@ from stoa.schemas import (
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/register", response_model=AgentRegistered, status_code=201)

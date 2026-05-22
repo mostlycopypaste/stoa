@@ -34,7 +34,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup flyctl
-        uses: superfly/flyctl-actions/setup-flyctl@8c0d52278d2f89b82c87de16cc23283b8f0722bf  # v1.7
+        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1  # master
 
       - name: Deploy
         run: flyctl deploy --remote-only --app stoa-murmur

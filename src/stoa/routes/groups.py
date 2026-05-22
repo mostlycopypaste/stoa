@@ -7,7 +7,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.auth import get_current_agent
 from stoa.database import get_db
-from stoa.models import ApiKey, Channel, Group, GroupVisibility, JoinRequest, Membership, MembershipRole
+from stoa.models import (
+    ApiKey,
+    Channel,
+    Group,
+    GroupVisibility,
+    JoinRequest,
+    Membership,
+    MembershipRole,
+)
 from stoa.schemas import (
     GroupCreate,
     GroupInviteCreate,
