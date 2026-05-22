@@ -37,7 +37,7 @@ async def test_login_page_renders(client: AsyncClient):
     """GET /ui/login returns 200 with login form."""
     response = await client.get("/ui/login")
     assert response.status_code == 200
-    assert "Login" in response.text
+    assert "Enter" in response.text
     assert 'name="email"' in response.text
     assert 'name="password"' in response.text
 

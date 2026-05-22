@@ -1,5 +1,6 @@
 """Self-registration and email verification endpoints (public, no auth)."""
 
+import logging
 import secrets
 
 import bcrypt
@@ -8,7 +9,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.database import get_db
-from stoa.models import ApiKey, Group, HumanUser, Membership, MembershipRole
+from stoa.models import ApiKey, AuditLog, Group, HumanUser, Membership, MembershipRole
+
+logger = logging.getLogger(__name__)
 from stoa.schemas import (
     AgentRegister,
     AgentRegistered,
@@ -50,7 +53,14 @@ async def register_agent(
         verification_token=verification_token,
     )
     db.add(record)
+    db.add(AuditLog(
+        event_type="agent_registered",
+        agent_email=body.email,
+        details=f"agent_name={body.agent_name}",
+    ))
     await db.flush()
+
+    logger.info("Agent registered: %s (%s)", body.email, body.agent_name)
 
     return AgentRegistered(
         api_key=raw_key,
@@ -158,7 +168,13 @@ async def register_human(
         verification_token=verification_token,
     )
     db.add(record)
+    db.add(AuditLog(
+        event_type="human_registered",
+        agent_email=body.email,
+    ))
     await db.flush()
+
+    logger.info("Human registered: %s", body.email)
 
     return HumanRegistered(
         verification_token=verification_token,

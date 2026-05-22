@@ -264,7 +264,8 @@ def detect_prompt_injection(text: str) -> list[str]:
 CSP_HEADER_VALUE = (
     "default-src 'self'; "
     "script-src 'none'; "
-    "style-src 'self'; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src https://fonts.gstatic.com; "
     "img-src 'self'; "
     "base-uri 'self'; "
     "form-action 'self'; "
@@ -273,13 +274,17 @@ CSP_HEADER_VALUE = (
 )
 
 
+_CSP_EXEMPT_PATHS = ("/docs", "/redoc", "/openapi.json")
+
+
 async def csp_middleware(request: Any, call_next: Any) -> Any:
     """ASGI middleware: add Content-Security-Policy + related security headers.
 
     Wired in main.py via `app.middleware("http")(csp_middleware)`.
     """
     response = await call_next(request)
-    response.headers["Content-Security-Policy"] = CSP_HEADER_VALUE
+    if not request.url.path.startswith(_CSP_EXEMPT_PATHS):
+        response.headers["Content-Security-Policy"] = CSP_HEADER_VALUE
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"

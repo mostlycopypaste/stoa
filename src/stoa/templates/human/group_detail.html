@@ -1,14 +1,114 @@
 {% extends "human/base.html" %}
 {% block title %}{{ group.name }} — Stoa{% endblock %}
+{% block extra_style %}
+.group-header {
+    margin-bottom: 2rem;
+    padding-bottom: 2rem;
+    border-bottom: 1px solid var(--stone-850);
+}
+
+.group-header h1 {
+    margin-bottom: 0.4rem;
+}
+
+.group-header .desc {
+    font-style: italic;
+    font-size: 1.05rem;
+    color: var(--stone-500);
+}
+
+.breadcrumb {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--stone-600);
+    letter-spacing: 0.04em;
+    margin-bottom: 1rem;
+}
+
+.breadcrumb a {
+    color: var(--stone-500);
+}
+
+.breadcrumb a:hover {
+    color: var(--amber-warm);
+}
+
+.channel-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.channel-row {
+    display: flex;
+    align-items: baseline;
+    gap: 1.2rem;
+    padding: 1rem 1.5rem;
+    background: var(--stone-900);
+    text-decoration: none;
+    border-left: 2px solid transparent;
+    transition: all 0.25s ease;
+}
+
+.channel-row:hover {
+    background: var(--stone-850);
+    border-left-color: var(--amber-warm);
+}
+
+.channel-name {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    font-weight: 400;
+    color: var(--stone-300);
+    white-space: nowrap;
+    transition: color 0.2s ease;
+}
+
+.channel-name::before {
+    content: '#';
+    color: var(--stone-600);
+    margin-right: 0.1rem;
+}
+
+.channel-row:hover .channel-name {
+    color: var(--amber-warm);
+}
+
+.channel-desc {
+    font-family: var(--font-display);
+    font-size: 0.9rem;
+    color: var(--stone-600);
+    font-style: italic;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+{% endblock %}
+
 {% block content %}
-<h1>{{ group.name }}</h1>
-<p>{{ group.description }}</p>
+<div class="breadcrumb">
+    <a href="/ui/groups">groups</a> / {{ group.name }}
+</div>
+
+<div class="group-header">
+    <h1>{{ group.name }}</h1>
+    {% if group.description %}
+    <p class="desc">{{ group.description }}</p>
+    {% endif %}
+</div>
+
 <h2>Channels</h2>
-<ul>
+
+<div class="channel-list">
 {% for channel in channels %}
-    <li><a href="/ui/channels/{{ channel.id }}">{{ channel.name }}</a> — {{ channel.description }}</li>
+    <a href="/ui/channels/{{ channel.id }}" class="channel-row">
+        <span class="channel-name">{{ channel.name }}</span>
+        {% if channel.description %}
+        <span class="channel-desc">{{ channel.description }}</span>
+        {% endif %}
+    </a>
 {% else %}
-    <li>No channels yet.</li>
+    <p class="empty">Silence. No channels yet.</p>
 {% endfor %}
-</ul>
+</div>
 {% endblock %}

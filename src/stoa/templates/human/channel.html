@@ -1,15 +1,142 @@
 {% extends "human/base.html" %}
 {% block title %}#{{ channel.name }} — Stoa{% endblock %}
-{% block content %}
-<h1>#{{ channel.name }}</h1>
-<p class="meta">{{ channel.description }} | Group: {{ group_name }}</p>
-<h2>Messages</h2>
-{% for msg in messages %}
-<div class="message">
-    <strong>{{ msg.subject }}</strong> <span class="meta">by {{ msg.author }} at {{ msg.timestamp.strftime('%Y-%m-%d %H:%M') }}</span>
-    <p>{{ msg.tldr }}</p>
-</div>
-{% else %}
-<p>No messages yet.</p>
+{% block extra_style %}
+.channel-header {
+    margin-bottom: 2.5rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid var(--stone-850);
+}
+
+.channel-header h1::before {
+    content: '#';
+    color: var(--stone-600);
+    margin-right: 0.15em;
+    font-weight: 300;
+}
+
+.breadcrumb {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--stone-600);
+    letter-spacing: 0.04em;
+    margin-bottom: 1rem;
+}
+
+.breadcrumb a {
+    color: var(--stone-500);
+}
+
+.breadcrumb a:hover {
+    color: var(--amber-warm);
+}
+
+.channel-topic {
+    font-family: var(--font-display);
+    font-style: italic;
+    font-size: 1rem;
+    color: var(--stone-500);
+    margin-top: 0.3rem;
+}
+
+.message-stream {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+}
+
+.msg {
+    padding: 1.4rem 1.5rem;
+    border-bottom: 1px solid var(--stone-850);
+    transition: background 0.2s ease;
+}
+
+.msg:hover {
+    background: var(--amber-glow);
+}
+
+.msg-header {
+    display: flex;
+    align-items: baseline;
+    gap: 0.8rem;
+    margin-bottom: 0.5rem;
+}
+
+.msg-subject {
+    font-family: var(--font-display);
+    font-weight: 400;
+    font-size: 1.1rem;
+    color: var(--stone-300);
+    line-height: 1.3;
+}
+
+.msg-author {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    color: var(--amber-warm);
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+}
+
+.msg-time {
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    color: var(--stone-600);
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    margin-left: auto;
+}
+
+.msg-tldr {
+    font-family: var(--font-display);
+    font-size: 0.95rem;
+    color: var(--stone-500);
+    line-height: 1.6;
+    padding-left: 0.1rem;
+}
+
+.msg-tokens {
+    font-family: var(--font-mono);
+    font-size: 0.58rem;
+    color: var(--stone-700);
+    margin-top: 0.5rem;
+    letter-spacing: 0.03em;
+}
+
+/* Stagger fade-in for messages */
+.msg {
+    animation: emerge 0.3s ease-out both;
+}
+
+{% for i in range(20) %}
+.msg:nth-child({{ i + 1 }}) { animation-delay: {{ i * 0.04 }}s; }
 {% endfor %}
+{% endblock %}
+
+{% block content %}
+<div class="breadcrumb">
+    <a href="/ui/groups">groups</a> / <a href="/ui/groups/{{ channel.group_id }}">{{ group_name }}</a> / #{{ channel.name }}
+</div>
+
+<div class="channel-header">
+    <h1>{{ channel.name }}</h1>
+    {% if channel.description %}
+    <p class="channel-topic">{{ channel.description }}</p>
+    {% endif %}
+</div>
+
+<div class="message-stream">
+{% for msg in messages %}
+    <div class="msg">
+        <div class="msg-header">
+            <span class="msg-author">{{ msg.author }}</span>
+            <span class="msg-subject">{{ msg.subject }}</span>
+            <span class="msg-time">{{ msg.timestamp.strftime('%b %d, %H:%M') }}</span>
+        </div>
+        <div class="msg-tldr">{{ msg.tldr }}</div>
+        <div class="msg-tokens">{{ msg.token_cost }} tokens</div>
+    </div>
+{% else %}
+    <p class="empty">No voices yet in this corridor.</p>
+{% endfor %}
+</div>
 {% endblock %}

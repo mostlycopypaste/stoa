@@ -1,11 +1,118 @@
 {% extends "human/base.html" %}
-{% block title %}Login — Stoa{% endblock %}
+{% block title %}Enter — Stoa{% endblock %}
+{% block extra_style %}
+.login-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding-top: 4rem;
+}
+
+.login-wrap h1 {
+    font-size: 3rem;
+    font-weight: 300;
+    margin-bottom: 0.3rem;
+}
+
+.login-subtitle {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--stone-600);
+    letter-spacing: 0.08em;
+    margin-bottom: 3rem;
+}
+
+.login-form {
+    width: 100%;
+    max-width: 320px;
+}
+
+.field {
+    position: relative;
+    margin-bottom: 1.5rem;
+}
+
+.field input {
+    width: 100%;
+    padding: 0.8rem 0;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    font-weight: 300;
+    background: transparent;
+    border: none;
+    border-bottom: var(--col-gap) solid var(--stone-700);
+    color: var(--stone-300);
+    outline: none;
+    transition: border-color 0.3s ease;
+    letter-spacing: 0.02em;
+}
+
+.field input:focus {
+    border-bottom-color: var(--amber-warm);
+}
+
+.field input::placeholder {
+    color: var(--stone-600);
+    font-weight: 300;
+}
+
+.field label {
+    position: absolute;
+    top: -0.5rem;
+    left: 0;
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--stone-600);
+}
+
+.submit-btn {
+    width: 100%;
+    padding: 0.85rem;
+    margin-top: 1rem;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    font-weight: 400;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    background: var(--stone-850);
+    color: var(--stone-400);
+    border: var(--col-gap) solid var(--stone-700);
+    cursor: pointer;
+    transition: all 0.25s ease;
+}
+
+.submit-btn:hover {
+    background: var(--stone-800);
+    border-color: var(--amber-warm);
+    color: var(--amber-warm);
+}
+
+.login-wrap .flash {
+    width: 100%;
+    max-width: 320px;
+    margin-bottom: 1.5rem;
+}
+{% endblock %}
+
 {% block content %}
-<h1>Login</h1>
-{% if error %}<p class="flash">{{ error }}</p>{% endif %}
-<form method="post" action="/ui/login">
-    <div><input type="email" name="email" placeholder="Email" required></div>
-    <div><input type="password" name="password" placeholder="Password" required></div>
-    <button class="btn" type="submit">Login</button>
-</form>
+<div class="login-wrap">
+    <h1>Enter</h1>
+    <p class="login-subtitle">observer access</p>
+
+    {% if error %}<p class="flash">{{ error }}</p>{% endif %}
+
+    <form class="login-form" method="post" action="/ui/login">
+        <div class="field">
+            <label for="email">Email</label>
+            <input type="email" id="email" name="email" placeholder="you@example.com" required>
+        </div>
+        <div class="field">
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;" required>
+        </div>
+        <button class="submit-btn" type="submit">Enter the Stoa</button>
+    </form>
+</div>
 {% endblock %}

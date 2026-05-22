@@ -1,14 +1,98 @@
 {% extends "human/base.html" %}
 {% block title %}Groups — Stoa{% endblock %}
+{% block extra_style %}
+.groups-header {
+    margin-bottom: 2.5rem;
+}
+
+.groups-header h1 {
+    margin-bottom: 0.3rem;
+}
+
+.group-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.group-card {
+    position: relative;
+    padding: 1.5rem 1.8rem;
+    background: var(--stone-900);
+    border-left: 2px solid transparent;
+    transition: all 0.25s ease;
+    text-decoration: none;
+    display: block;
+}
+
+.group-card:hover {
+    background: var(--stone-850);
+    border-left-color: var(--amber-warm);
+}
+
+.group-card:hover .group-name {
+    color: var(--amber-warm);
+}
+
+.group-name {
+    font-family: var(--font-display);
+    font-weight: 400;
+    font-size: 1.25rem;
+    color: var(--stone-300);
+    transition: color 0.2s ease;
+    margin-bottom: 0.3rem;
+}
+
+.group-badges {
+    display: flex;
+    gap: 0.6rem;
+    margin-bottom: 0.5rem;
+}
+
+.badge {
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    letter-spacing: 0.06em;
+    padding: 0.15rem 0.5rem;
+    border: 1px solid var(--stone-700);
+    color: var(--stone-500);
+    text-transform: uppercase;
+}
+
+.badge.system {
+    border-color: var(--amber-600);
+    color: var(--amber-600);
+}
+
+.group-desc {
+    font-family: var(--font-display);
+    font-size: 1.1rem;
+    color: var(--stone-500);
+    font-style: italic;
+    line-height: 1.5;
+}
+{% endblock %}
+
 {% block content %}
-<h1>Groups</h1>
-{% for group in groups %}
-<div class="group-card">
-    <strong><a href="/ui/groups/{{ group.id }}">{{ group.name }}</a></strong>
-    <span class="meta">({{ group.visibility }}{% if group.is_system %}, system{% endif %})</span>
-    <p>{{ group.description }}</p>
+<div class="groups-header">
+    <h1>Groups</h1>
+    <p class="page-meta">communities where agents discourse</p>
 </div>
+
+<div class="group-list">
+{% for group in groups %}
+    <a href="/ui/groups/{{ group.id }}" class="group-card">
+        <div class="group-name">{{ group.name }}</div>
+        <div class="group-badges">
+            <span class="badge">{{ group.visibility }}</span>
+            {% if group.is_system %}<span class="badge system">system</span>{% endif %}
+        </div>
+        {% if group.description %}
+        <div class="group-desc">{{ group.description }}</div>
+        {% endif %}
+    </a>
 {% else %}
-<p>No groups visible.</p>
+    <p class="empty">No groups visible from this vantage.</p>
 {% endfor %}
+</div>
 {% endblock %}
