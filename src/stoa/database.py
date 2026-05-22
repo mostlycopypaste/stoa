@@ -7,7 +7,11 @@ from sqlalchemy.orm import DeclarativeBase
 
 from stoa.config import settings
 
-engine = create_async_engine(settings.database_url, echo=False)
+connect_args: dict = {}
+if "asyncpg" in settings.database_url:
+    connect_args["ssl"] = False
+
+engine = create_async_engine(settings.database_url, echo=False, connect_args=connect_args)
 async_session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
