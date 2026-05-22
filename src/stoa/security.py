@@ -370,7 +370,7 @@ async def audit(
             event_type=safe_event,
             agent_email=safe_email,
             details=payload_str,
-            timestamp=datetime.now(UTC),
+            timestamp=datetime.now(UTC).replace(tzinfo=None),
         )
     )
 
