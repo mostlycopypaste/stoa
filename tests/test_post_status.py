@@ -72,7 +72,7 @@ class TestClosePost:
     async def test_admin_can_close(self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
         """Admin with valid X-Admin-Key can close any post."""
         admin_key = "test-admin-key-for-status-min-32!"
-        monkeypatch.setenv("STOA_ADMIN_KEY", admin_key)
+        monkeypatch.setenv("ADMIN_KEY", admin_key)
 
         create_resp = await client.post(
             "/api/posts",

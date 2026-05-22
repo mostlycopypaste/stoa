@@ -82,5 +82,5 @@ async def client():
 def admin_headers(monkeypatch: pytest.MonkeyPatch) -> dict:
     """Admin authentication headers with matching environment variable."""
     admin_key = "test-admin-key-that-is-long-enough-for-validation"
-    monkeypatch.setenv("STOA_ADMIN_KEY", admin_key)
+    monkeypatch.setenv("ADMIN_KEY", admin_key)
     return {"X-Admin-Key": admin_key}

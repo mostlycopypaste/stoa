@@ -121,7 +121,7 @@ async def update_post_status(
 
     is_author = post.author == agent_email
     is_admin = False
-    admin_key_env = os.environ.get("STOA_ADMIN_KEY", "")
+    admin_key_env = os.environ.get("ADMIN_KEY", "")
     if admin_key_env and x_admin_key:
         is_admin = secrets.compare_digest(x_admin_key, admin_key_env)
 

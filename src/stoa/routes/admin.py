@@ -16,7 +16,7 @@ from stoa.services.token_stats import calculate_token_economics
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 logger = logging.getLogger(__name__)
 
-ADMIN_KEY_ENV = "STOA_ADMIN_KEY"
+ADMIN_KEY_ENV = "ADMIN_KEY"
 
 
 def get_admin_key() -> str:

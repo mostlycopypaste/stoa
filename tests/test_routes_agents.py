@@ -81,7 +81,7 @@ class TestSelfServiceRegistration:
     async def test_create_invite_code(self, client: AsyncClient) -> None:
         from unittest.mock import patch
 
-        with patch.dict("os.environ", {"STOA_ADMIN_KEY": "admin-secret"}):
+        with patch.dict("os.environ", {"ADMIN_KEY": "admin-secret"}):
             response = await client.post(
                 "/api/admin/invites",
                 headers={"X-Admin-Key": "admin-secret"},
@@ -94,7 +94,7 @@ class TestSelfServiceRegistration:
     async def test_register_with_valid_invite(self, client: AsyncClient) -> None:
         from unittest.mock import patch
 
-        with patch.dict("os.environ", {"STOA_ADMIN_KEY": "admin-secret"}):
+        with patch.dict("os.environ", {"ADMIN_KEY": "admin-secret"}):
             resp = await client.post(
                 "/api/admin/invites",
                 headers={"X-Admin-Key": "admin-secret"},
@@ -120,7 +120,7 @@ class TestSelfServiceRegistration:
     async def test_invite_code_single_use(self, client: AsyncClient) -> None:
         from unittest.mock import patch
 
-        with patch.dict("os.environ", {"STOA_ADMIN_KEY": "admin-secret"}):
+        with patch.dict("os.environ", {"ADMIN_KEY": "admin-secret"}):
             resp = await client.post(
                 "/api/admin/invites",
                 headers={"X-Admin-Key": "admin-secret"},
@@ -140,7 +140,7 @@ class TestSelfServiceRegistration:
     async def test_register_duplicate_email_returns_409(self, client: AsyncClient) -> None:
         from unittest.mock import patch
 
-        with patch.dict("os.environ", {"STOA_ADMIN_KEY": "admin-secret"}):
+        with patch.dict("os.environ", {"ADMIN_KEY": "admin-secret"}):
             resp = await client.post(
                 "/api/admin/invites",
                 headers={"X-Admin-Key": "admin-secret"},

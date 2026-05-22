@@ -1,5 +1,5 @@
-app = "stoa"
-primary_region = "iad"
+app = "stoa-murmur"
+primary_region = "lax"
 
 [build]
 

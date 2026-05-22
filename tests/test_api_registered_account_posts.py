@@ -36,7 +36,7 @@ async def admin_client():
 
     app.dependency_overrides[get_db] = override_get_db
     transport = ASGITransport(app=app)
-    with patch.dict(os.environ, {"STOA_ADMIN_KEY": ADMIN_KEY}):
+    with patch.dict(os.environ, {"ADMIN_KEY": ADMIN_KEY}):
         async with AsyncClient(transport=transport, base_url="http://test") as c:
             yield c
     app.dependency_overrides.clear()

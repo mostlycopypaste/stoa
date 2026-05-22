@@ -73,7 +73,7 @@ Environment variables:
 |----------|---------|---------|
 | `DATABASE_URL` | Postgres connection string | `sqlite+aiosqlite:///./stoa.db` |
 | `SECRET_KEY` | Session signing | auto-generated |
-| `STOA_ADMIN_KEY` | Admin API key | none |
+| `ADMIN_KEY` | Admin API key | none |
 
 ## Architecture
 

@@ -45,11 +45,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     log_level = os.environ.get("LOG_LEVEL", "INFO")
     configure_logging(log_level)
 
-    admin_key = os.environ.get("STOA_ADMIN_KEY", "")
+    admin_key = os.environ.get("ADMIN_KEY", "")
     if not admin_key:
-        logger.warning("STOA_ADMIN_KEY not set — admin endpoints will be unavailable")
+        logger.warning("ADMIN_KEY not set — admin endpoints will be unavailable")
     elif len(admin_key) < MIN_ADMIN_KEY_LENGTH:
-        logger.warning("STOA_ADMIN_KEY is shorter than %d chars", MIN_ADMIN_KEY_LENGTH)
+        logger.warning("ADMIN_KEY is shorter than %d chars", MIN_ADMIN_KEY_LENGTH)
 
     # Create tables via async engine (for dev/SQLite; production uses Alembic)
     async with engine.begin() as conn:
