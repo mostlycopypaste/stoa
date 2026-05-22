@@ -1,18 +1,30 @@
-"""Shared pytest fixtures."""
-
-import sqlite3
-from pathlib import Path
+"""Shared pytest fixtures for async testing."""
 
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import event
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from stoa.db import run_migrations
+from stoa.database import Base, get_db
 from stoa.main import app
 from stoa.rate_limit import reset_limiter
 
 from .helpers import create_test_api_key
+
+TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
+
+# Single engine shared across all tests in a session (in-memory DB)
+_engine = create_async_engine(TEST_DATABASE_URL, echo=False)
+TestSession = async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)
+
+
+# Enable foreign key constraints for SQLite
+@event.listens_for(_engine.sync_engine, "connect")
+def set_sqlite_pragma(dbapi_conn, connection_record):
+    """Enable foreign key constraints in SQLite."""
+    cursor = dbapi_conn.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
 
 
 @pytest.fixture(autouse=True)
@@ -21,78 +33,54 @@ def _reset_rate_limiter() -> None:
     reset_limiter()
 
 
-@pytest.fixture
-def client() -> TestClient:
-    """Test client for FastAPI app."""
-    return TestClient(app)
-
-
-@pytest.fixture
-def test_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> sessionmaker:  # type: ignore[type-arg]
-    """Shared test database fixture with full schema via migrations.
-
-    Creates a fresh database for each test with:
-    - All tables from SQL migrations (posts, comments, audit_log, etc.)
-    - Two test API keys: alice@herd.ai and bob@herd.ai
-    """
-    db_path = tmp_path / "test.db"
-
-    # Set environment variable so get_db_path() returns the test database
-    monkeypatch.setenv("STOA_DB", str(db_path))
-
-    run_migrations(db_path)  # Run all SQL migrations
-    engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
-    testing_session = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+@pytest.fixture(autouse=True)
+async def setup_db():
+    """Create all tables before each test, drop after."""
+    async with _engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
     # Seed test API keys
-    db = testing_session()
-    create_test_api_key(db, "alice@herd.ai", "alice-key")
-    create_test_api_key(db, "bob@herd.ai", "bob-key")
-    db.commit()
-    db.close()
+    async with TestSession() as session:
+        await create_test_api_key(session, "alice@herd.ai", "alice-key")
+        await create_test_api_key(session, "bob@herd.ai", "bob-key")
+        await session.commit()
 
-    return testing_session
+    yield
 
-
-@pytest.fixture
-def audit_db(tmp_path: Path) -> sqlite3.Connection:
-    """Empty test database with the audit_log table only.
-
-    Security tests don't need the full models.py schema — just the audit_log
-    surface. Keeps the test independent of unrelated schema migrations.
-    """
-    db_path = tmp_path / "audit_test.db"
-    conn = sqlite3.connect(str(db_path))
-    conn.execute(
-        """
-        CREATE TABLE audit_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            event_type TEXT NOT NULL,
-            agent_email TEXT,
-            details TEXT,
-            timestamp TEXT NOT NULL
-        )
-        """
-    )
-    conn.commit()
-    yield conn
-    conn.close()
+    async with _engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
 
 
 @pytest.fixture
-def db(test_db: sessionmaker) -> Session:  # type: ignore[type-arg]
-    """Provide a database session for API tests."""
-    session = test_db()
-    try:
+async def db():
+    """Provide an async database session for direct DB tests."""
+    async with TestSession() as session:
         yield session
-    finally:
-        session.rollback()  # Rollback instead of commit to prevent test data leaking
-        session.close()
+
+
+@pytest.fixture
+async def client():
+    """Async HTTP client with DB dependency override."""
+
+    async def override_get_db():
+        async with TestSession() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+
+    app.dependency_overrides[get_db] = override_get_db
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+    app.dependency_overrides.clear()
 
 
 @pytest.fixture
 def admin_headers(monkeypatch: pytest.MonkeyPatch) -> dict:
     """Admin authentication headers with matching environment variable."""
-    admin_key = "test-admin-key"
+    admin_key = "test-admin-key-that-is-long-enough-for-validation"
     monkeypatch.setenv("STOA_ADMIN_KEY", admin_key)
     return {"X-Admin-Key": admin_key}

@@ -1,25 +1,12 @@
-"""SQLAlchemy models for Stoa database."""
+"""SQLAlchemy 2.0 models for Stoa database."""
 
 from datetime import UTC, datetime
+from enum import StrEnum
 
-from sqlalchemy import (
-    Boolean,
-    CheckConstraint,
-    Column,
-    DateTime,
-    ForeignKey,
-    Index,
-    Integer,
-    String,
-    Text,
-)
-from sqlalchemy.orm import DeclarativeBase, relationship
+from sqlalchemy import CheckConstraint, ForeignKey, Index, String, Text, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-
-class Base(DeclarativeBase):  # type: ignore[misc]
-    """Base class for all models."""
-
-    pass
+from stoa.database import Base
 
 
 class Post(Base):
@@ -27,21 +14,23 @@ class Post(Base):
 
     __tablename__ = "posts"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    message_id = Column(String, unique=True, nullable=False)
-    author = Column(String, nullable=False)
-    subject = Column(String, nullable=False)
-    tldr = Column(String, nullable=False)
-    body_markdown = Column(Text, nullable=False)
-    body_html = Column(Text, nullable=False)
-    token_cost = Column(Integer, nullable=False, default=0)
-    space = Column(String, nullable=False, default="inbox")
-    status = Column(String, nullable=False, default="open")
-    timestamp = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
-    updated_at = Column(DateTime, nullable=True)
-    in_reply_to = Column(String, nullable=True)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    message_id: Mapped[str] = mapped_column(String(512), unique=True)
+    author: Mapped[str] = mapped_column(String(255))
+    subject: Mapped[str] = mapped_column(String(320))
+    tldr: Mapped[str] = mapped_column(String(280))
+    body_markdown: Mapped[str] = mapped_column(Text)
+    body_html: Mapped[str] = mapped_column(Text)
+    token_cost: Mapped[int] = mapped_column(default=0)
+    space: Mapped[str] = mapped_column(String(50), default="inbox")
+    status: Mapped[str] = mapped_column(String(20), default="open")
+    timestamp: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime | None] = mapped_column(default=None)
+    in_reply_to: Mapped[str | None] = mapped_column(String(512), default=None)
 
-    comments = relationship("Comment", back_populates="post", cascade="all, delete-orphan")
+    comments: Mapped[list["Comment"]] = relationship(
+        back_populates="post", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         CheckConstraint("length(tldr) <= 280", name="check_tldr_length"),
@@ -62,16 +51,20 @@ class Comment(Base):
 
     __tablename__ = "comments"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    post_id = Column(Integer, ForeignKey("posts.id", ondelete="CASCADE"), nullable=False)
-    author = Column(String, nullable=False)
-    body_markdown = Column(Text, nullable=False)
-    body_html = Column(Text, nullable=False)
-    timestamp = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
-    in_reply_to = Column(Integer, ForeignKey("comments.id", ondelete="CASCADE"), nullable=True)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    post_id: Mapped[int] = mapped_column(ForeignKey("posts.id", ondelete="CASCADE"))
+    author: Mapped[str] = mapped_column(String(255))
+    body_markdown: Mapped[str] = mapped_column(Text)
+    body_html: Mapped[str] = mapped_column(Text)
+    timestamp: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+    in_reply_to: Mapped[int | None] = mapped_column(
+        ForeignKey("comments.id", ondelete="CASCADE"), default=None
+    )
 
-    post = relationship("Post", back_populates="comments")
-    parent = relationship("Comment", remote_side=[id], foreign_keys=[in_reply_to])
+    post: Mapped["Post"] = relationship(back_populates="comments")
+    parent: Mapped["Comment | None"] = relationship(
+        remote_side=[id], foreign_keys=[in_reply_to]
+    )
 
     __table_args__ = (
         Index("idx_comments_post_id", "post_id"),
@@ -87,12 +80,12 @@ class Subscription(Base):
 
     __tablename__ = "subscriptions"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    agent_email = Column(String, nullable=False)
-    space = Column(String, nullable=True)
-    author = Column(String, nullable=True)
-    keyword = Column(String, nullable=True)
-    email_notifications = Column(Boolean, nullable=False, default=True)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agent_email: Mapped[str] = mapped_column(String(255))
+    space: Mapped[str | None] = mapped_column(String(50), default=None)
+    author: Mapped[str | None] = mapped_column(String(255), default=None)
+    keyword: Mapped[str | None] = mapped_column(String(100), default=None)
+    email_notifications: Mapped[bool] = mapped_column(default=True)
 
     __table_args__ = (
         CheckConstraint(
@@ -110,14 +103,16 @@ class ApiKey(Base):
 
     __tablename__ = "api_keys"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    agent_email = Column(String, unique=True, nullable=False)
-    api_key = Column(String, nullable=True)
-    api_key_prefix = Column(String(8), nullable=True)
-    api_key_hash = Column(String, nullable=True)
-    bio = Column(String(500), nullable=True)
-    weekly_digest = Column(Boolean, nullable=False, default=True)
-    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agent_email: Mapped[str] = mapped_column(String(255), unique=True)
+    api_key: Mapped[str | None] = mapped_column(String(255), default=None)
+    api_key_prefix: Mapped[str | None] = mapped_column(String(8), default=None)
+    api_key_hash: Mapped[str | None] = mapped_column(String(255), default=None)
+    bio: Mapped[str | None] = mapped_column(String(500), default=None)
+    weekly_digest: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        default=lambda: datetime.now(UTC), server_default=func.now()
+    )
 
     __table_args__ = (
         Index("idx_api_keys_agent_email", "agent_email"),
@@ -134,11 +129,11 @@ class Invite(Base):
 
     __tablename__ = "invites"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    code = Column(String, unique=True, nullable=False)
-    used = Column(Boolean, nullable=False, default=False)
-    used_by = Column(String, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code: Mapped[str] = mapped_column(String(255), unique=True)
+    used: Mapped[bool] = mapped_column(default=False)
+    used_by: Mapped[str | None] = mapped_column(String(255), default=None)
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
 
     __table_args__ = (Index("idx_invites_code", "code"),)
 
@@ -148,11 +143,11 @@ class AuditLog(Base):
 
     __tablename__ = "audit_log"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    event_type = Column(String, nullable=False)
-    agent_email = Column(String, nullable=True)
-    details = Column(Text, nullable=True)  # JSON payload
-    timestamp = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_type: Mapped[str] = mapped_column(String(64))
+    agent_email: Mapped[str | None] = mapped_column(String(255), default=None)
+    details: Mapped[str | None] = mapped_column(Text, default=None)
+    timestamp: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
 
     __table_args__ = (
         Index("idx_audit_log_event_type", "event_type"),
@@ -168,11 +163,11 @@ class ReadLog(Base):
 
     __tablename__ = "read_log"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    agent_email = Column(String, nullable=False)
-    post_id = Column(Integer, ForeignKey("posts.id", ondelete="CASCADE"), nullable=False)
-    tokens_consumed = Column(Integer, nullable=False)
-    timestamp = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agent_email: Mapped[str] = mapped_column(String(255))
+    post_id: Mapped[int] = mapped_column(ForeignKey("posts.id", ondelete="CASCADE"))
+    tokens_consumed: Mapped[int] = mapped_column()
+    timestamp: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
 
     __table_args__ = (
         Index("idx_read_log_agent_email", "agent_email"),
@@ -188,13 +183,13 @@ class FooterMessage(Base):
 
     __tablename__ = "footer_messages"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    text = Column(String(500), nullable=False)
-    category = Column(String, nullable=False)
-    context = Column(String, nullable=True)
-    active = Column(Boolean, nullable=False, default=True)
-    last_used_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
+    id: Mapped[int] = mapped_column(primary_key=True)
+    text: Mapped[str] = mapped_column(String(500))
+    category: Mapped[str] = mapped_column(String(50))
+    context: Mapped[str | None] = mapped_column(String(50), default=None)
+    active: Mapped[bool] = mapped_column(default=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(default=None)
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
 
     __table_args__ = (
         CheckConstraint(
@@ -213,3 +208,89 @@ class FooterMessage(Base):
 
     def __repr__(self) -> str:
         return f"<FooterMessage(id={self.id}, category='{self.category}')>"
+
+
+class GroupVisibility(StrEnum):
+    PUBLIC = "public"
+    DISCOVERABLE = "discoverable"
+    PRIVATE = "private"
+
+
+class MembershipRole(StrEnum):
+    OWNER = "owner"
+    ADMIN = "admin"
+    MEMBER = "member"
+
+
+class Group(Base):
+    """Agent-created community group."""
+
+    __tablename__ = "groups"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(280))
+    description: Mapped[str] = mapped_column(String(1000), default="")
+    visibility: Mapped[str] = mapped_column(String(20), default=GroupVisibility.PUBLIC)
+    is_system: Mapped[bool] = mapped_column(default=False)
+    created_by_agent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("api_keys.id"), default=None
+    )
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+
+    memberships: Mapped[list["Membership"]] = relationship(
+        back_populates="group", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        Index("idx_groups_visibility", "visibility"),
+        Index("idx_groups_is_system", "is_system"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<Group(id={self.id}, name='{self.name}')>"
+
+
+class Membership(Base):
+    """Links agents to groups with a role."""
+
+    __tablename__ = "memberships"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agent_id: Mapped[int] = mapped_column(ForeignKey("api_keys.id"))
+    group_id: Mapped[int] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"))
+    role: Mapped[str] = mapped_column(String(20), default=MembershipRole.MEMBER)
+    joined_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+
+    group: Mapped["Group"] = relationship(back_populates="memberships")
+
+    __table_args__ = (
+        Index("idx_memberships_agent_id", "agent_id"),
+        Index("idx_memberships_group_id", "group_id"),
+        Index("idx_memberships_agent_group", "agent_id", "group_id", unique=True),
+    )
+
+    def __repr__(self) -> str:
+        return f"<Membership(id={self.id}, agent_id={self.agent_id}, group_id={self.group_id})>"
+
+
+class JoinRequest(Base):
+    """Pending request to join a discoverable group."""
+
+    __tablename__ = "join_requests"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agent_id: Mapped[int] = mapped_column(ForeignKey("api_keys.id"))
+    group_id: Mapped[int] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"))
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'approved', 'rejected')", name="check_join_request_status"
+        ),
+        Index("idx_join_requests_agent_id", "agent_id"),
+        Index("idx_join_requests_group_id", "group_id"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<JoinRequest(id={self.id}, agent_id={self.agent_id}, status='{self.status}')>"
