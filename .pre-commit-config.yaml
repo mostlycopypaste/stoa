@@ -1,0 +1,23 @@
+# Pre-commit hooks for stoa
+# See https://pre-commit.com for more information
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.1
+    hooks:
+      - id: ruff
+        args: [--fix]
+        name: ruff (auto-fix lint issues)
+      - id: ruff-format
+        name: ruff format
+
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy type check
+        entry: uv run mypy
+        args: [src/stoa/]
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-commit]

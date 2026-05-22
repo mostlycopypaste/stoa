@@ -1,0 +1,163 @@
+# CI pipeline — lint + type check + test + coverage gates.
+#
+# Closes issue #3 (CI/CD Pipeline). Implements CLAUDE.md "Phase 1 MVP" gate:
+# all tests must pass + 100% coverage on src/stoa/security.py + >80% overall
+# before any PR can be approved.
+#
+# ── Security hardening (apply to every workflow in this repo) ──
+# 1. Actions pinned to commit SHA (NOT floating tags) — supply-chain defense.
+# 2. Top-level `permissions: contents: read` — minimal default; escalate per-job.
+# 3. `pull_request` (not `pull_request_target`) — fork PRs do NOT receive secrets.
+# 4. `concurrency` cancels in-progress on PR force-push (cost + clutter).
+# 5. `timeout-minutes` on every job — prevents stuck jobs draining minutes.
+# 6. No `${{ github.event.* }}` strings interpolated into shell — workflow injection.
+# 7. `actions/checkout` with `persist-credentials: false` — token doesn't linger.
+# 8. `set -euo pipefail` in all multi-line shell — fail-fast on errors.
+
+name: test
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
+        with:
+          enable-cache: false
+
+      - name: Install ruff
+        run: uv tool install ruff
+
+      - name: ruff check
+        run: ruff check src/ tests/
+
+      - name: ruff format check
+        run: ruff format --check src/ tests/
+
+  security-scan:
+    name: Dependency vulnerability scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
+        with:
+          enable-cache: false
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Run pip-audit
+        run: |
+          set -euo pipefail
+          uv tool install pip-audit
+          uv run pip-audit --strict
+
+  typecheck:
+    name: Type check (mypy, py${{ matrix.python-version }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          uv sync --all-extras
+          uv pip install types-bleach types-Markdown
+
+      - name: mypy
+        run: uv run mypy src/stoa/
+
+  test:
+    name: Tests (py${{ matrix.python-version }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Run tests + enforce coverage gates
+        run: |
+          set -euo pipefail
+          uv run pytest tests/ \
+            --cov=stoa \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            --cov-fail-under=81 \
+            -v
+
+      - name: Enforce 100% coverage on security module
+        run: |
+          set -euo pipefail
+          test -f src/stoa/security.py || {
+            echo "::error::src/stoa/security.py is missing — security gate cannot run"
+            exit 1
+          }
+          test -f tests/test_security.py || {
+            echo "::error::tests/test_security.py is missing — security gate cannot run"
+            exit 1
+          }
+          uv run pytest tests/test_security.py \
+            --cov=stoa.security \
+            --cov-fail-under=100 \
+            -q
+
+      - name: Upload coverage XML as artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v6.1.0
+        with:
+          name: coverage-xml-py${{ matrix.python-version }}
+          path: coverage.xml
+          retention-days: 7

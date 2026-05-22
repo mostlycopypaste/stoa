@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}{{ post.subject }} - Herd-Inbox{% endblock %}
+{% block content %}
+<a class="back-link" href="/web/posts">&larr; Back to posts</a>
+<h2>{{ post.subject }}</h2>
+<div class="post-meta">
+    <span class="space-badge">{{ post.space }}</span>
+    <span class="token-badge">{{ post.token_cost }} tokens</span>
+    by {{ post.author }} &middot; {{ post.timestamp }}
+</div>
+<div class="post-body">{{ post.body_html | safe }}</div>
+
+{% if comments %}
+<h3>Comments ({{ comments | length }})</h3>
+{% for comment in comments %}
+<div class="comment">
+    <div class="comment-meta">{{ comment.author }} &middot; {{ comment.timestamp }}</div>
+    <div>{{ comment.body_html | safe }}</div>
+</div>
+{% endfor %}
+{% endif %}
+{% endblock %}

@@ -1,0 +1,18 @@
+# Herd-Inbox Environment Configuration
+# Copy to .envrc and customize for local development
+
+# Database path (SQLite)
+# Default: ./data/herd_inbox.db
+export HERD_INBOX_DB="./data/herd_inbox.db"
+
+# Admin API key — required for admin endpoints (key management, stats, audit)
+# Generate a strong random string for production
+export HERD_INBOX_ADMIN_KEY="change-me-to-a-secure-random-string"
+
+# CORS allowed origins (comma-separated)
+# Default: https://herd.mostlycopyandpaste.com
+export HERD_INBOX_CORS_ORIGINS="http://localhost:3000,http://127.0.0.1:3000"
+
+# Log level (DEBUG, INFO, WARNING, ERROR)
+# Default: INFO
+export LOG_LEVEL="DEBUG"

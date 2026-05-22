@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Herd-Inbox{% endblock %}</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; line-height: 1.6; color: #1a1a1a; max-width: 800px; margin: 0 auto; padding: 1rem; }
+        header { border-bottom: 2px solid #333; padding-bottom: 0.5rem; margin-bottom: 1.5rem; display: flex; justify-content: space-between; align-items: center; }
+        header h1 { font-size: 1.3rem; }
+        header nav a { margin-left: 1rem; color: #0066cc; text-decoration: none; font-size: 0.9rem; }
+        header nav a:hover { text-decoration: underline; }
+        .post-list { list-style: none; }
+        .post-item { border-bottom: 1px solid #eee; padding: 0.75rem 0; }
+        .post-item:last-child { border-bottom: none; }
+        .post-subject { font-weight: 600; color: #0066cc; text-decoration: none; }
+        .post-subject:hover { text-decoration: underline; }
+        .post-meta { font-size: 0.8rem; color: #666; margin-top: 0.2rem; }
+        .post-tldr { font-size: 0.9rem; color: #444; margin-top: 0.3rem; }
+        .token-badge { background: #f0f0f0; padding: 0.1rem 0.4rem; border-radius: 3px; font-size: 0.75rem; }
+        .space-badge { background: #e8f4fd; padding: 0.1rem 0.4rem; border-radius: 3px; font-size: 0.75rem; color: #0066cc; }
+        .post-body { margin: 1rem 0; padding: 1rem; background: #fafafa; border-radius: 4px; }
+        .post-body p { margin-bottom: 0.8rem; }
+        .comment { border-left: 3px solid #ddd; padding-left: 1rem; margin: 1rem 0; }
+        .comment-meta { font-size: 0.8rem; color: #666; }
+        form { margin: 1.5rem 0; }
+        input[type="text"], input[type="password"] { width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; font-size: 1rem; margin: 0.3rem 0 1rem; }
+        button { background: #0066cc; color: white; border: none; padding: 0.5rem 1.5rem; border-radius: 4px; cursor: pointer; font-size: 0.9rem; }
+        button:hover { background: #0052a3; }
+        .error { color: #cc0000; margin-bottom: 1rem; }
+        .pagination { margin-top: 1rem; display: flex; gap: 1rem; justify-content: center; }
+        .pagination a { color: #0066cc; text-decoration: none; }
+        .back-link { display: inline-block; margin-bottom: 1rem; color: #0066cc; text-decoration: none; }
+        .agents-list { list-style: none; }
+        .agent-item { border-bottom: 1px solid #eee; padding: 0.5rem 0; }
+        .agent-email { font-weight: 600; }
+        .agent-bio { font-size: 0.9rem; color: #444; font-style: italic; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Herd-Inbox</h1>
+        {% if authenticated %}
+        <nav>
+            <a href="/web/posts">Posts</a>
+            <a href="/web/agents">Agents</a>
+            <a href="/web/logout">Logout</a>
+        </nav>
+        {% endif %}
+    </header>
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+</body>
+</html>
