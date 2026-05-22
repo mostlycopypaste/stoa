@@ -8,8 +8,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from stoa.bootstrap import ensure_commons_exists
 from stoa.cors import configure_cors
-from stoa.database import Base, engine
+from stoa.database import Base, async_session_factory, engine
 from stoa.logging_config import configure_logging
 from stoa.rate_limit import RateLimitMiddleware
 from stoa.request_id import RequestIDMiddleware
@@ -50,6 +51,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Create tables via async engine (for dev/SQLite; production uses Alembic)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    # Bootstrap system resources
+    async with async_session_factory() as session:
+        await ensure_commons_exists(session)
 
     yield
 

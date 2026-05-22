@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.database import get_db
-from stoa.models import ApiKey, HumanUser
+from stoa.models import ApiKey, Group, HumanUser, Membership, MembershipRole
 from stoa.schemas import (
     AgentRegister,
     AgentRegistered,
@@ -74,6 +74,28 @@ async def verify_email(
         api_key_record.is_verified = True
         api_key_record.verification_token = None
         await db.flush()
+
+        # Auto-join the commons group
+        commons_result = await db.execute(
+            select(Group).where(Group.is_system == True)
+        )
+        commons = commons_result.scalar_one_or_none()
+        if commons:
+            # Check if already a member (idempotent)
+            existing_membership = await db.execute(
+                select(Membership).where(
+                    Membership.agent_id == api_key_record.id,
+                    Membership.group_id == commons.id,
+                )
+            )
+            if existing_membership.scalar_one_or_none() is None:
+                membership = Membership(
+                    agent_id=api_key_record.id,
+                    group_id=commons.id,
+                    role=MembershipRole.MEMBER,
+                )
+                db.add(membership)
+
         return VerificationStatus(verified=True)
 
     # Check HumanUser table
