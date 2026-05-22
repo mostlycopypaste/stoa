@@ -1,5 +1,7 @@
 """Group CRUD, join, request, approve, and invite routes."""
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -69,7 +71,7 @@ async def create_group(
     body: GroupCreate,
     agent_email: str = Depends(get_current_agent),
     db: AsyncSession = Depends(get_db),
-) -> dict:
+) -> dict[str, Any]:
     """Create a group. The creator becomes the owner."""
     agent = await _get_agent_record(db, agent_email)
 
@@ -154,7 +156,7 @@ async def get_group(
     group_id: int,
     agent_email: str = Depends(get_current_agent),
     db: AsyncSession = Depends(get_db),
-) -> dict:
+) -> dict[str, Any]:
     """Get group detail. Private groups require membership."""
     agent = await _get_agent_record(db, agent_email)
     group = await _get_group_or_404(db, group_id)
@@ -213,7 +215,7 @@ async def join_group(
     group_id: int,
     agent_email: str = Depends(get_current_agent),
     db: AsyncSession = Depends(get_db),
-) -> dict:
+) -> dict[str, Any]:
     """Join a public group immediately."""
     agent = await _get_agent_record(db, agent_email)
     group = await _get_group_or_404(db, group_id)
@@ -251,7 +253,7 @@ async def request_join(
     group_id: int,
     agent_email: str = Depends(get_current_agent),
     db: AsyncSession = Depends(get_db),
-) -> dict:
+) -> dict[str, Any]:
     """Request to join a discoverable group. Requires owner/admin approval."""
     agent = await _get_agent_record(db, agent_email)
     group = await _get_group_or_404(db, group_id)
@@ -302,7 +304,7 @@ async def approve_request(
     request_id: int,
     agent_email: str = Depends(get_current_agent),
     db: AsyncSession = Depends(get_db),
-) -> dict:
+) -> dict[str, Any]:
     """Approve a join request. Only owner/admin of the group can approve."""
     agent = await _get_agent_record(db, agent_email)
     group = await _get_group_or_404(db, group_id)
@@ -363,7 +365,7 @@ async def invite_agent(
     body: GroupInviteCreate,
     agent_email: str = Depends(get_current_agent),
     db: AsyncSession = Depends(get_db),
-) -> dict:
+) -> dict[str, Any]:
     """Invite an agent to a group (direct add). Only owner/admin can invite."""
     agent = await _get_agent_record(db, agent_email)
     group = await _get_group_or_404(db, group_id)

@@ -50,7 +50,7 @@ async def post_message(
     body: ChannelMessageCreate,
     agent_email: str = Depends(get_current_agent),
     db: AsyncSession = Depends(get_db),
-):
+) -> dict[str, Any]:
     agent = await _get_agent_record(db, agent_email)
     await _require_channel_membership(db, agent.id, channel_id)
 
@@ -95,7 +95,7 @@ async def list_channel_messages(
     offset: int = Query(default=0, ge=0),
     agent_email: str = Depends(get_current_agent),
     db: AsyncSession = Depends(get_db),
-):
+) -> list[dict[str, Any]]:
     agent = await _get_agent_record(db, agent_email)
     await _require_channel_membership(db, agent.id, channel_id)
 
@@ -127,7 +127,7 @@ async def get_message(
     message_id: int,
     agent_email: str = Depends(get_current_agent),
     db: AsyncSession = Depends(get_db),
-):
+) -> dict[str, Any]:
     result = await db.execute(select(Post).where(Post.id == message_id))
     post = result.scalar_one_or_none()
     if post is None:

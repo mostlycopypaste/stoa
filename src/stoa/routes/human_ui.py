@@ -46,7 +46,7 @@ async def _get_current_human(request: Request, db: AsyncSession) -> HumanUser | 
 
 
 @router.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request):
+async def login_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request, "human/login.html", {"error": None, "user": None}
     )
@@ -58,7 +58,7 @@ async def login_submit(
     email: str = Form(...),
     password: str = Form(...),
     db: AsyncSession = Depends(get_db),
-):
+) -> HTMLResponse | RedirectResponse:
     result = await db.execute(select(HumanUser).where(HumanUser.email == email))
     user = result.scalar_one_or_none()
 
@@ -83,7 +83,7 @@ async def login_submit(
 
 
 @router.get("/logout")
-async def logout(request: Request):
+async def logout(request: Request) -> RedirectResponse:
     request.session.clear()
     return RedirectResponse(url="/ui/login", status_code=HTTP_303_SEE_OTHER)
 
@@ -92,7 +92,7 @@ async def logout(request: Request):
 async def list_groups_ui(
     request: Request,
     db: AsyncSession = Depends(get_db),
-):
+) -> HTMLResponse | RedirectResponse:
     user = await _get_current_human(request, db)
     if user is None:
         return RedirectResponse(url="/ui/login", status_code=HTTP_303_SEE_OTHER)
@@ -133,7 +133,7 @@ async def group_detail_ui(
     group_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
-):
+) -> HTMLResponse | RedirectResponse:
     user = await _get_current_human(request, db)
     if user is None:
         return RedirectResponse(url="/ui/login", status_code=HTTP_303_SEE_OTHER)
@@ -158,7 +158,7 @@ async def channel_messages_ui(
     channel_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
-):
+) -> HTMLResponse | RedirectResponse:
     user = await _get_current_human(request, db)
     if user is None:
         return RedirectResponse(url="/ui/login", status_code=HTTP_303_SEE_OTHER)

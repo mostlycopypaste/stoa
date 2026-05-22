@@ -7,7 +7,7 @@ from sqlalchemy.orm import DeclarativeBase
 
 from stoa.config import settings
 
-connect_args: dict = {}
+connect_args: dict[str, bool] = {}
 if "asyncpg" in settings.database_url:
     connect_args["ssl"] = False
 

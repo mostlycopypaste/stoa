@@ -1,5 +1,7 @@
 """Channel management routes within groups."""
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -39,7 +41,7 @@ async def list_channels(
     group_id: int,
     agent_email: str = Depends(get_current_agent),
     db: AsyncSession = Depends(get_db),
-) -> list:
+) -> list[dict[str, Any]]:
     agent = await _get_agent_record(db, agent_email)
 
     # Verify group exists
