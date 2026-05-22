@@ -8,8 +8,8 @@ from stoa.rate_limit import reset_limiter
 
 @pytest.mark.asyncio
 async def test_list_channels_as_member(client: AsyncClient):
-    """List channels as a member returns 200."""
-    # Create a group
+    """List channels as a member returns 200 (includes default #general)."""
+    # Create a group (auto-creates #general channel)
     resp = await client.post(
         "/api/groups",
         json={"name": "Test Group", "description": "A group", "visibility": "public"},
@@ -18,15 +18,7 @@ async def test_list_channels_as_member(client: AsyncClient):
     assert resp.status_code == 201
     group_id = resp.json()["id"]
 
-    # Create a channel
-    resp = await client.post(
-        f"/api/groups/{group_id}/channels",
-        json={"name": "general", "description": "General discussion"},
-        headers={"X-API-Key": "alice-key"},
-    )
-    assert resp.status_code == 201
-
-    # List channels
+    # List channels — should have the default #general
     resp = await client.get(
         f"/api/groups/{group_id}/channels",
         headers={"X-API-Key": "alice-key"},
@@ -156,7 +148,7 @@ async def test_create_channel_in_nonexistent_group(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_max_channels_limit(client: AsyncClient):
     """Creating channels beyond max limit returns 409."""
-    # Create a group
+    # Create a group (auto-creates #general, so 1 channel already exists)
     resp = await client.post(
         "/api/groups",
         json={"name": "Group", "description": "Test", "visibility": "public"},
@@ -165,10 +157,9 @@ async def test_max_channels_limit(client: AsyncClient):
     assert resp.status_code == 201
     group_id = resp.json()["id"]
 
-    # Create 50 channels (the limit), resetting rate limiter every 9 requests
-    # (rate limit is 10 requests per window, and we used 1 for group creation)
-    for i in range(50):
-        if i > 0 and i % 9 == 0:
+    # Create 49 more channels to reach the limit of 50, resetting rate limiter periodically
+    for i in range(49):
+        if i > 0 and i % 8 == 0:
             reset_limiter()
         resp = await client.post(
             f"/api/groups/{group_id}/channels",
@@ -177,13 +168,13 @@ async def test_max_channels_limit(client: AsyncClient):
         )
         assert resp.status_code == 201
 
-    # Reset limiter one more time before final request
+    # Reset limiter before final request
     reset_limiter()
 
-    # Try to create the 51st channel
+    # Try to create the 51st channel (50 already exist)
     resp = await client.post(
         f"/api/groups/{group_id}/channels",
-        json={"name": "channel-51"},
+        json={"name": "channel-overflow"},
         headers={"X-API-Key": "alice-key"},
     )
     assert resp.status_code == 409

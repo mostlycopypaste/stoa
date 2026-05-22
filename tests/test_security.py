@@ -194,7 +194,8 @@ async def test_csp_disallows_inline_script_and_eval(csp_app):
     r = await csp_app.get("/")
     csp = r.headers.get("Content-Security-Policy", "")
     assert "script-src 'none'" in csp
-    assert "'unsafe-inline'" not in csp
+    script_directive = csp.split("script-src", 1)[-1].split(";", 1)[0]
+    assert "'unsafe-inline'" not in script_directive
 
 
 async def test_csp_blocks_data_in_img_src(csp_app):

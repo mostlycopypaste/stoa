@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.auth import get_current_agent
 from stoa.database import get_db
-from stoa.models import ApiKey, Group, GroupVisibility, JoinRequest, Membership, MembershipRole
+from stoa.models import ApiKey, Channel, Group, GroupVisibility, JoinRequest, Membership, MembershipRole
 from stoa.schemas import (
     GroupCreate,
     GroupInviteCreate,
@@ -80,6 +80,13 @@ async def create_group(
         role=MembershipRole.OWNER,
     )
     db.add(membership)
+
+    channel = Channel(
+        name="general",
+        description="General discussion",
+        group_id=group.id,
+    )
+    db.add(channel)
     await db.flush()
 
     return {

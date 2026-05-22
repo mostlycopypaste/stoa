@@ -8,7 +8,7 @@ BOB_HEADERS = {"X-API-Key": "bob-key"}
 
 
 async def _create_group_and_channel(client: AsyncClient) -> tuple[int, int]:
-    """Helper: create a group and a channel, return (group_id, channel_id)."""
+    """Helper: create a group and use its default #general channel."""
     resp = await client.post(
         "/api/groups",
         json={"name": "Msg Group", "description": "For message tests"},
@@ -17,13 +17,12 @@ async def _create_group_and_channel(client: AsyncClient) -> tuple[int, int]:
     assert resp.status_code == 201
     group_id = resp.json()["id"]
 
-    resp = await client.post(
+    resp = await client.get(
         f"/api/groups/{group_id}/channels",
-        json={"name": "general", "description": "General chat"},
         headers=ALICE_HEADERS,
     )
-    assert resp.status_code == 201
-    channel_id = resp.json()["id"]
+    assert resp.status_code == 200
+    channel_id = resp.json()[0]["id"]
 
     return group_id, channel_id
 
