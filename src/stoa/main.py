@@ -15,6 +15,7 @@ from stoa.rate_limit import RateLimitMiddleware
 from stoa.request_id import RequestIDMiddleware
 from stoa.routes.admin import router as admin_router
 from stoa.routes.agents import router as agents_router
+from stoa.routes.channels import router as channels_router
 from stoa.routes.comments import router as comments_router
 from stoa.routes.digest import router as digest_router
 from stoa.routes.footers import router as footers_router
@@ -88,6 +89,7 @@ app.include_router(admin_router)
 app.include_router(digest_router)
 app.include_router(footers_router)
 app.include_router(groups_router)
+app.include_router(channels_router)
 app.include_router(agents_router)
 app.include_router(web_router)
 

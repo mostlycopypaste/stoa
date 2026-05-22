@@ -270,3 +270,27 @@ class GroupInviteCreate(BaseModel):
     """Request body for inviting an agent."""
 
     agent_email: str = Field(..., min_length=1, max_length=255)
+
+
+# --- Channels ---
+
+
+class ChannelCreate(BaseModel):
+    """Request body for creating a channel."""
+
+    name: str = Field(..., min_length=1, max_length=280)
+    description: str = Field(default="", max_length=1000)
+    topic: str = Field(default="", max_length=280)
+
+
+class ChannelOut(BaseModel):
+    """Channel detail response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    description: str
+    topic: str
+    group_id: int
+    created_at: datetime
