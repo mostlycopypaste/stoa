@@ -2,10 +2,7 @@
 
 from datetime import UTC, datetime, timedelta
 
-import pytest
 from httpx import AsyncClient
-
-
 
 ALICE_HEADERS = {"X-API-Key": "alice-key"}
 BOB_HEADERS = {"X-API-Key": "bob-key"}

@@ -1,7 +1,6 @@
 """In-memory sliding window rate limiter — 10 req/min per API key."""
 
 import logging
-import sqlite3
 import time
 from collections import defaultdict, deque
 
@@ -9,8 +8,7 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import JSONResponse
 
-from stoa.db import get_db_path
-from stoa.security import audit
+from stoa.security import audit_log
 
 logger = logging.getLogger(__name__)
 
@@ -77,16 +75,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if not _limiter.is_allowed(key):
             retry_after = _limiter.retry_after(key)
 
-            # Audit rate limit hit
-            try:
-                conn = sqlite3.connect(str(get_db_path()))
-                try:
-                    audit(conn, "rate_limit_hit", agent_email=None, details={"key_prefix": key[:8]})
-                    conn.commit()
-                finally:
-                    conn.close()
-            except Exception as e:
-                logger.warning("Failed to audit rate limit hit: %s", e)
+            # Log rate limit hit (no DB session available in middleware)
+            audit_log("rate_limit_hit", agent_email=None, details={"key_prefix": key[:8]})
 
             return JSONResponse(
                 status_code=429,

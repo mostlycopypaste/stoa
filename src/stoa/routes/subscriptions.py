@@ -1,10 +1,11 @@
-"""Subscription management routes."""
+"""Subscription management routes (async)."""
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.auth import get_current_agent
-from stoa.deps import get_db
+from stoa.database import get_db
 from stoa.models import Subscription
 from stoa.schemas import SubscriptionCreate, SubscriptionOut
 
@@ -12,10 +13,10 @@ router = APIRouter(prefix="/api/subscriptions", tags=["subscriptions"])
 
 
 @router.post("", response_model=SubscriptionOut, status_code=201)
-def create_subscription(
+async def create_subscription(
     body: SubscriptionCreate,
     agent_email: str = Depends(get_current_agent),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:  # type: ignore[type-arg]
     """Create a subscription filter."""
     sub = Subscription(
@@ -25,7 +26,7 @@ def create_subscription(
         keyword=body.keyword,
     )
     db.add(sub)
-    db.flush()
+    await db.flush()
 
     return {
         "id": sub.id,
@@ -37,12 +38,15 @@ def create_subscription(
 
 
 @router.get("", response_model=list[SubscriptionOut])
-def list_subscriptions(
+async def list_subscriptions(
     agent_email: str = Depends(get_current_agent),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> list[dict]:  # type: ignore[type-arg]
     """List my subscriptions."""
-    subs = db.query(Subscription).filter(Subscription.agent_email == agent_email).all()
+    result = await db.execute(
+        select(Subscription).where(Subscription.agent_email == agent_email)
+    )
+    subs = result.scalars().all()
     return [
         {
             "id": s.id,
@@ -56,15 +60,16 @@ def list_subscriptions(
 
 
 @router.delete("/{subscription_id}", status_code=204)
-def delete_subscription(
+async def delete_subscription(
     subscription_id: int,
     agent_email: str = Depends(get_current_agent),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> None:
     """Delete a subscription. Only the owner can delete."""
-    sub = db.query(Subscription).filter(Subscription.id == subscription_id).first()
+    result = await db.execute(select(Subscription).where(Subscription.id == subscription_id))
+    sub = result.scalar_one_or_none()
     if sub is None:
         raise HTTPException(status_code=404, detail="Subscription not found")
     if sub.agent_email != agent_email:
         raise HTTPException(status_code=403, detail="Can only delete your own subscriptions")
-    db.delete(sub)
+    await db.delete(sub)

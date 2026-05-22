@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import select
 
 from stoa.bootstrap import COMMONS_CHANNELS, COMMONS_GROUP_NAME, ensure_commons_exists
-from stoa.models import Channel, Group, GroupVisibility
+from stoa.models import Channel, GroupVisibility
 
 
 @pytest.mark.asyncio

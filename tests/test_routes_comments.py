@@ -1,41 +1,16 @@
-"""Tests for comment API routes."""
+"""Tests for comment API routes (async)."""
 
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy.orm import sessionmaker
-
-from stoa.deps import get_db
-from stoa.main import app
-
-
-@pytest.fixture
-def client(test_db: sessionmaker) -> TestClient:  # type: ignore[type-arg]
-    """Test client with database override."""
-
-    def override_get_db():  # type: ignore[no-untyped-def]
-        db = test_db()
-        try:
-            yield db
-            db.commit()
-        except Exception:
-            db.rollback()
-            raise
-        finally:
-            db.close()
-
-    app.dependency_overrides[get_db] = override_get_db
-    yield TestClient(app, raise_server_exceptions=False)
-    app.dependency_overrides.clear()
-
+from httpx import AsyncClient
 
 ALICE = {"X-API-Key": "alice-key"}
 BOB = {"X-API-Key": "bob-key"}
 
 
 @pytest.fixture
-def post_id(client: TestClient) -> int:
+async def post_id(client: AsyncClient) -> int:
     """Create a post and return its ID."""
-    resp = client.post(
+    resp = await client.post(
         "/api/posts",
         json={"subject": "Discussion Topic", "body_markdown": "Let's talk about this"},
         headers=ALICE,
@@ -44,8 +19,8 @@ def post_id(client: TestClient) -> int:
 
 
 class TestCreateComment:
-    def test_success(self, client: TestClient, post_id: int) -> None:
-        response = client.post(
+    async def test_success(self, client: AsyncClient, post_id: int) -> None:
+        response = await client.post(
             f"/api/posts/{post_id}/comments",
             json={"body_markdown": "Great post!"},
             headers=BOB,
@@ -56,24 +31,24 @@ class TestCreateComment:
         assert data["body_markdown"] == "Great post!"
         assert data["token_cost"] > 0
 
-    def test_post_not_found(self, client: TestClient) -> None:
-        response = client.post(
+    async def test_post_not_found(self, client: AsyncClient) -> None:
+        response = await client.post(
             "/api/posts/9999/comments",
             json={"body_markdown": "Comment"},
             headers=ALICE,
         )
         assert response.status_code == 404
 
-    def test_empty_body_rejected(self, client: TestClient, post_id: int) -> None:
-        response = client.post(
+    async def test_empty_body_rejected(self, client: AsyncClient, post_id: int) -> None:
+        response = await client.post(
             f"/api/posts/{post_id}/comments",
             json={"body_markdown": ""},
             headers=ALICE,
         )
         assert response.status_code == 422
 
-    def test_unauthorized(self, client: TestClient, post_id: int) -> None:
-        response = client.post(
+    async def test_unauthorized(self, client: AsyncClient, post_id: int) -> None:
+        response = await client.post(
             f"/api/posts/{post_id}/comments",
             json={"body_markdown": "Unauthorized"},
             headers={"X-API-Key": "bad-key"},
@@ -82,58 +57,59 @@ class TestCreateComment:
 
 
 class TestListComments:
-    def test_empty(self, client: TestClient, post_id: int) -> None:
-        response = client.get(f"/api/posts/{post_id}/comments", headers=ALICE)
+    async def test_empty(self, client: AsyncClient, post_id: int) -> None:
+        response = await client.get(f"/api/posts/{post_id}/comments", headers=ALICE)
         assert response.status_code == 200
         assert response.json() == []
 
-    def test_chronological_order(self, client: TestClient, post_id: int) -> None:
-        client.post(
+    async def test_chronological_order(self, client: AsyncClient, post_id: int) -> None:
+        await client.post(
             f"/api/posts/{post_id}/comments",
             json={"body_markdown": "First comment"},
             headers=ALICE,
         )
-        client.post(
+        await client.post(
             f"/api/posts/{post_id}/comments",
             json={"body_markdown": "Second comment"},
             headers=BOB,
         )
-        response = client.get(f"/api/posts/{post_id}/comments", headers=ALICE)
+        response = await client.get(f"/api/posts/{post_id}/comments", headers=ALICE)
         comments = response.json()
         assert len(comments) == 2
         assert comments[0]["body_markdown"] == "First comment"
         assert comments[1]["body_markdown"] == "Second comment"
 
-    def test_post_not_found(self, client: TestClient) -> None:
-        response = client.get("/api/posts/9999/comments", headers=ALICE)
+    async def test_post_not_found(self, client: AsyncClient) -> None:
+        response = await client.get("/api/posts/9999/comments", headers=ALICE)
         assert response.status_code == 404
 
 
 class TestDeleteComment:
-    def test_author_can_delete(self, client: TestClient, post_id: int) -> None:
-        resp = client.post(
+    async def test_author_can_delete(self, client: AsyncClient, post_id: int) -> None:
+        resp = await client.post(
             f"/api/posts/{post_id}/comments",
             json={"body_markdown": "Delete me"},
             headers=BOB,
         )
         comment_id = resp.json()["id"]
-        response = client.delete(f"/api/posts/{post_id}/comments/{comment_id}", headers=BOB)
+        response = await client.delete(f"/api/posts/{post_id}/comments/{comment_id}", headers=BOB)
         assert response.status_code == 204
 
-        # Verify deleted
-        comments = client.get(f"/api/posts/{post_id}/comments", headers=ALICE).json()
+        comments = (await client.get(f"/api/posts/{post_id}/comments", headers=ALICE)).json()
         assert len(comments) == 0
 
-    def test_non_author_cannot_delete(self, client: TestClient, post_id: int) -> None:
-        resp = client.post(
+    async def test_non_author_cannot_delete(self, client: AsyncClient, post_id: int) -> None:
+        resp = await client.post(
             f"/api/posts/{post_id}/comments",
             json={"body_markdown": "Bob's comment"},
             headers=BOB,
         )
         comment_id = resp.json()["id"]
-        response = client.delete(f"/api/posts/{post_id}/comments/{comment_id}", headers=ALICE)
+        response = await client.delete(
+            f"/api/posts/{post_id}/comments/{comment_id}", headers=ALICE
+        )
         assert response.status_code == 403
 
-    def test_comment_not_found(self, client: TestClient, post_id: int) -> None:
-        response = client.delete(f"/api/posts/{post_id}/comments/9999", headers=ALICE)
+    async def test_comment_not_found(self, client: AsyncClient, post_id: int) -> None:
+        response = await client.delete(f"/api/posts/{post_id}/comments/9999", headers=ALICE)
         assert response.status_code == 404

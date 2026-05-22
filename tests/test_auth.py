@@ -3,7 +3,6 @@
 import pytest
 from fastapi import Depends, FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.auth import get_current_agent
 from stoa.database import get_db

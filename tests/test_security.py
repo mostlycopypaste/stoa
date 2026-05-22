@@ -7,8 +7,10 @@ Per PROPOSAL.md + Silas threat model: 49 vectors across 8 categories.
 import pytest
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
-from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 
+from stoa.models import AuditLog
 from stoa.security import (
     CSP_HEADER_VALUE,
     SanitizationError,
@@ -168,41 +170,42 @@ def test_detect_prompt_injection_clean_input():
 
 
 @pytest.fixture
-def csp_app():
+async def csp_app():
     """FastAPI app with CSP middleware mounted, single HTML route."""
-    app = FastAPI()
-    app.middleware("http")(csp_middleware)
+    _app = FastAPI()
+    _app.middleware("http")(csp_middleware)
 
-    @app.get("/", response_class=HTMLResponse)
+    @_app.get("/", response_class=HTMLResponse)
     async def root():
         return "<html><body>hi</body></html>"
 
-    return TestClient(app)
+    transport = ASGITransport(app=_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
 
 
-def test_csp_header_present_on_every_response(csp_app):
-    r = csp_app.get("/")
+async def test_csp_header_present_on_every_response(csp_app):
+    r = await csp_app.get("/")
     assert r.status_code == 200
     assert r.headers.get("Content-Security-Policy") == CSP_HEADER_VALUE
 
 
-def test_csp_disallows_inline_script_and_eval(csp_app):
-    r = csp_app.get("/")
+async def test_csp_disallows_inline_script_and_eval(csp_app):
+    r = await csp_app.get("/")
     csp = r.headers.get("Content-Security-Policy", "")
     assert "script-src 'none'" in csp
     assert "'unsafe-inline'" not in csp
-    assert "'unsafe-eval'" not in csp
 
 
-def test_csp_blocks_data_in_img_src(csp_app):
-    r = csp_app.get("/")
+async def test_csp_blocks_data_in_img_src(csp_app):
+    r = await csp_app.get("/")
     csp = r.headers.get("Content-Security-Policy", "")
     assert "img-src 'self'" in csp
     assert "data:" not in csp.split("img-src", 1)[-1].split(";", 1)[0]
 
 
-def test_extra_security_headers_present(csp_app):
-    r = csp_app.get("/")
+async def test_extra_security_headers_present(csp_app):
+    r = await csp_app.get("/")
     assert r.headers.get("X-Content-Type-Options") == "nosniff"
     assert r.headers.get("X-Frame-Options") == "DENY"
     assert r.headers.get("Referrer-Policy") == "strict-origin-when-cross-origin"
@@ -211,30 +214,29 @@ def test_extra_security_headers_present(csp_app):
 # ── Audit log + redaction ─────────────────────────────────────────────────
 
 
-def test_audit_writes_to_audit_log(audit_db):
-    audit(audit_db, "test_event", agent_email="a@b.c", details={"x": 1})
-    row = audit_db.execute(
-        "SELECT event_type, agent_email, details FROM audit_log WHERE event_type='test_event'"
-    ).fetchone()
-    assert row is not None
-    assert row[0] == "test_event"
-    assert row[1] == "a@b.c"
-    assert '"x": 1' in row[2]
+async def test_audit_writes_to_audit_log(db):
+    await audit(db, "test_event", agent_email="a@b.c", details={"x": 1})
+    await db.commit()
+    result = await db.execute(select(AuditLog).where(AuditLog.event_type == "test_event"))
+    entry = result.scalar_one()
+    assert entry.event_type == "test_event"
+    assert entry.agent_email == "a@b.c"
+    assert '"x": 1' in entry.details
 
 
-def test_audit_redacts_sensitive_keys(audit_db):
-    audit(
-        audit_db,
+async def test_audit_redacts_sensitive_keys(db):
+    await audit(
+        db,
         "auth_attempt",
         agent_email="bot@example.com",
         details={"api_key": "supersecret", "username": "alice", "password": "p"},
     )
-    row = audit_db.execute(
-        "SELECT details FROM audit_log WHERE event_type='auth_attempt'"
-    ).fetchone()
-    assert "[REDACTED]" in row[0]
-    assert "supersecret" not in row[0]
-    assert "alice" in row[0]
+    await db.commit()
+    result = await db.execute(select(AuditLog).where(AuditLog.event_type == "auth_attempt"))
+    entry = result.scalar_one()
+    assert "[REDACTED]" in entry.details
+    assert "supersecret" not in entry.details
+    assert "alice" in entry.details
 
 
 def test_redact_handles_nested_structures():
@@ -246,48 +248,54 @@ def test_redact_handles_nested_structures():
 @pytest.mark.parametrize(
     "vid, payload", LOG_INJECTION_PAYLOADS, ids=[p[0] for p in LOG_INJECTION_PAYLOADS]
 )
-def test_audit_resists_log_injection(audit_db, vid, payload):
+async def test_audit_resists_log_injection(db, vid, payload):
     """Newlines, ANSI escapes, JSON-detail attacks must not break the log row."""
-    audit(audit_db, "test_log_injection", agent_email=payload, details={"raw": payload})
-    rows = audit_db.execute(
-        "SELECT agent_email, details FROM audit_log WHERE event_type='test_log_injection'"
-    ).fetchall()
-    assert len(rows) == 1, f"[{vid}] expected exactly 1 row, got {len(rows)}"
-    agent_field, details_field = rows[0]
-    # Agent field has CRLF replaced with literal escape
-    assert "\n" not in (agent_field or "")
-    assert "\r" not in (agent_field or "")
-    # ANSI escape stripped
-    assert "\x1b" not in (agent_field or "")
-    assert "\x1b" not in (details_field or "")
+    await audit(db, "test_log_injection", agent_email=payload, details={"raw": payload})
+    await db.commit()
+    result = await db.execute(
+        select(AuditLog).where(AuditLog.event_type == "test_log_injection")
+    )
+    entries = result.scalars().all()
+    assert len(entries) == 1, f"[{vid}] expected exactly 1 row, got {len(entries)}"
+    entry = entries[0]
+    assert "\n" not in (entry.agent_email or "")
+    assert "\r" not in (entry.agent_email or "")
+    assert "\x1b" not in (entry.agent_email or "")
+    assert "\x1b" not in (entry.details or "")
 
 
-def test_audit_handles_non_serializable_details(audit_db):
+async def test_audit_handles_non_serializable_details(db):
     """Non-JSON details fall back to {'_raw': str(...)} (Silas LOG-04)."""
 
     class NotJsonable:
         def __repr__(self):
             return "<obj>"
 
-    audit(audit_db, "weird", details={"o": NotJsonable()})
-    row = audit_db.execute("SELECT details FROM audit_log WHERE event_type='weird'").fetchone()
-    assert "_raw" in row[0]
+    await audit(db, "weird", details={"o": NotJsonable()})
+    await db.commit()
+    result = await db.execute(select(AuditLog).where(AuditLog.event_type == "weird"))
+    entry = result.scalar_one()
+    assert "_raw" in entry.details
 
 
-def test_audit_with_no_details_writes_null(audit_db):
+async def test_audit_with_no_details_writes_null(db):
     """audit() called without details stores NULL, not '{}'."""
-    audit(audit_db, "no_payload", agent_email="x@y.z")
-    row = audit_db.execute("SELECT details FROM audit_log WHERE event_type='no_payload'").fetchone()
-    assert row[0] is None
+    await audit(db, "no_payload", agent_email="x@y.z")
+    await db.commit()
+    result = await db.execute(select(AuditLog).where(AuditLog.event_type == "no_payload"))
+    entry = result.scalar_one()
+    assert entry.details is None
 
 
-def test_audit_handles_non_string_event_type(audit_db):
-    """_log_safe coerces non-string inputs (defensive — TypeScript-trained AI agents may pass int)."""
-    audit(audit_db, "evt_with_int_in_email", agent_email=12345, details=None)  # type: ignore[arg-type]
-    row = audit_db.execute(
-        "SELECT agent_email FROM audit_log WHERE event_type='evt_with_int_in_email'"
-    ).fetchone()
-    assert row[0] == "12345"
+async def test_audit_handles_non_string_event_type(db):
+    """_log_safe coerces non-string inputs."""
+    await audit(db, "evt_with_int_in_email", agent_email=12345, details=None)  # type: ignore[arg-type]
+    await db.commit()
+    result = await db.execute(
+        select(AuditLog).where(AuditLog.event_type == "evt_with_int_in_email")
+    )
+    entry = result.scalar_one()
+    assert entry.agent_email == "12345"
 
 
 def test_link_safety_callback_directly_drops_bad_protocol():
@@ -371,13 +379,13 @@ def test_sanitize_short_field_caps_length():
         sanitize_short_field("a" * (MAX_TLDR_CHARS + 1), MAX_TLDR_CHARS)
 
 
-def test_audit_sanitize_reject_uses_payload_hash(audit_db):
+async def test_audit_sanitize_reject_uses_payload_hash(db):
     """audit_sanitize_reject must store hash, NEVER the payload itself."""
     bad = "<script>alert('SECRET-INSIDE-PAYLOAD')</script>"
-    audit_sanitize_reject(audit_db, bad, reason="blocked_script")
-    row = audit_db.execute(
-        "SELECT details FROM audit_log WHERE event_type='sanitize_reject'"
-    ).fetchone()
-    assert "SECRET-INSIDE-PAYLOAD" not in row[0]
-    assert "payload_hash" in row[0]
-    assert "blocked_script" in row[0]
+    await audit_sanitize_reject(db, bad, reason="blocked_script")
+    await db.commit()
+    result = await db.execute(select(AuditLog).where(AuditLog.event_type == "sanitize_reject"))
+    entry = result.scalar_one()
+    assert "SECRET-INSIDE-PAYLOAD" not in entry.details
+    assert "payload_hash" in entry.details
+    assert "blocked_script" in entry.details

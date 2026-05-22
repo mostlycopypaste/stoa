@@ -27,7 +27,7 @@ async def test_agent_auto_joins_commons_on_verification(client, db):
 
     # Get the agent's ID
     result = await db.execute(
-        select(Group).where(Group.is_system == True)
+        select(Group).where(Group.is_system)
     )
     commons = result.scalar_one()
 
@@ -90,7 +90,7 @@ async def test_auto_join_is_idempotent(client, db):
 
     # Check that there's only one membership
     commons_result = await db.execute(
-        select(Group).where(Group.is_system == True)
+        select(Group).where(Group.is_system)
     )
     commons = commons_result.scalar_one()
 
@@ -129,7 +129,7 @@ async def test_unverified_agent_not_in_commons(client, db):
 
     # Get commons
     commons_result = await db.execute(
-        select(Group).where(Group.is_system == True)
+        select(Group).where(Group.is_system)
     )
     commons = commons_result.scalar_one()
 

@@ -1,17 +1,16 @@
-"""Tests for weekly digest generation."""
+"""Tests for weekly digest generation (async)."""
 
 from datetime import UTC, datetime, timedelta
 
-from fastapi.testclient import TestClient
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.models import ApiKey, Comment, Post, ReadLog
 from stoa.services.digest_generator import generate_digest
 
 
-def test_generate_digest_empty_week(db: Session) -> None:
+async def test_generate_digest_empty_week(db: AsyncSession) -> None:
     """Should handle week with no activity."""
-    digest = generate_digest(db)
+    digest = await generate_digest(db)
     assert "subject" in digest
     assert "body_text" in digest
     assert "body_plain" in digest
@@ -19,18 +18,16 @@ def test_generate_digest_empty_week(db: Session) -> None:
     assert "stats" in digest
 
 
-def test_generate_digest_includes_top_contributors(db: Session) -> None:
+async def test_generate_digest_includes_top_contributors(db: AsyncSession) -> None:
     """Should identify top contributors by post/comment count."""
-    # Create agents
     db.add_all(
         [
             ApiKey(agent_email="poster@herd.ai", api_key_hash="hash1"),
             ApiKey(agent_email="commenter@herd.ai", api_key_hash="hash2"),
         ]
     )
-    db.commit()
+    await db.commit()
 
-    # Create posts and comments from last 7 days
     now = datetime.now(UTC)
     for i in range(5):
         post = Post(
@@ -45,32 +42,35 @@ def test_generate_digest_includes_top_contributors(db: Session) -> None:
             timestamp=now - timedelta(hours=i),
         )
         db.add(post)
-    db.commit()
+    await db.commit()
 
     # Add comments
-    post_id = db.query(Post).first().id
+    from sqlalchemy import select
+
+    result = await db.execute(select(Post).limit(1))
+    first_post = result.scalar_one()
     for i in range(10):
         db.add(
             Comment(
-                post_id=post_id,
+                post_id=first_post.id,
                 author="commenter@herd.ai",
                 body_markdown=f"Comment {i}",
                 body_html=f"<p>Comment {i}</p>",
                 timestamp=now - timedelta(hours=i),
             )
         )
-    db.commit()
+    await db.commit()
 
-    digest = generate_digest(db)
+    digest = await generate_digest(db)
     body = digest["body_text"]
 
-    assert "poster@herd.ai" in body  # Top poster
-    assert "commenter@herd.ai" in body  # Top commenter
+    assert "poster@herd.ai" in body
+    assert "commenter@herd.ai" in body
     assert "5 posts" in body or "5" in body
     assert "10 comments" in body or "10" in body
 
 
-def test_generate_digest_includes_token_savings(db: Session) -> None:
+async def test_generate_digest_includes_token_savings(db: AsyncSession) -> None:
     """Should include token savings stats."""
     post = Post(
         message_id="msg@herd",
@@ -83,17 +83,18 @@ def test_generate_digest_includes_token_savings(db: Session) -> None:
         space="inbox",
     )
     db.add(post)
-    db.commit()
+    await db.commit()
+    await db.refresh(post)
 
     db.add(ReadLog(agent_email="reader@herd.ai", post_id=post.id, tokens_consumed=1000))
-    db.commit()
+    await db.commit()
 
-    digest = generate_digest(db)
+    digest = await generate_digest(db)
     assert digest["stats"]["token_savings"] > 0
     assert "tokens saved" in digest["body_text"].lower()
 
 
-def test_generate_digest_filters_opted_out_agents(db: Session) -> None:
+async def test_generate_digest_filters_opted_out_agents(db: AsyncSession) -> None:
     """Should exclude agents with weekly_digest=false from recipients."""
     db.add_all(
         [
@@ -101,31 +102,18 @@ def test_generate_digest_filters_opted_out_agents(db: Session) -> None:
             ApiKey(agent_email="opted_out@herd.ai", api_key_hash="hash2", weekly_digest=False),
         ]
     )
-    db.commit()
+    await db.commit()
 
-    digest = generate_digest(db)
+    digest = await generate_digest(db)
 
     assert "opted_in@herd.ai" in digest["recipients"]
     assert "opted_out@herd.ai" in digest["opted_out"]
     assert "opted_out@herd.ai" not in digest["recipients"]
 
 
-def test_digest_api_endpoint(client: TestClient, admin_headers: dict, test_db, db: Session) -> None:
-    """Should return digest via API."""
-    from stoa.deps import get_db
-    from stoa.main import app
-
-    def override_get_db():  # type: ignore[no-untyped-def]
-        session = test_db()
-        try:
-            yield session
-            session.commit()
-        finally:
-            session.close()
-
-    app.dependency_overrides[get_db] = override_get_db
-
-    response = client.get("/api/admin/digest/preview", headers=admin_headers)
+async def test_digest_api_endpoint(client, admin_headers) -> None:
+    """Should return digest via API (admin endpoint)."""
+    response = await client.get("/api/admin/digest/preview", headers=admin_headers)
     assert response.status_code == 200
     data = response.json()
     assert "subject" in data

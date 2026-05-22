@@ -77,7 +77,7 @@ async def verify_email(
 
         # Auto-join the commons group
         commons_result = await db.execute(
-            select(Group).where(Group.is_system == True)
+            select(Group).where(Group.is_system)
         )
         commons = commons_result.scalar_one_or_none()
         if commons:

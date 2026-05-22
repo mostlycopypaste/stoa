@@ -27,8 +27,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
-import sqlite3
 import unicodedata
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -37,6 +37,7 @@ from typing import Any, Literal
 
 import bleach
 from markdown import markdown as md_to_html
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # Type alias for the optional injection-detected callback.
 # Caller passes a function that receives the list of matched delimiters; typically
@@ -322,17 +323,30 @@ def _log_safe(value: str) -> str:
     return value
 
 
-def audit(
-    conn: sqlite3.Connection,
+_audit_logger = logging.getLogger("stoa.audit")
+
+
+def prepare_audit_details(details: dict[str, Any] | None) -> str | None:
+    """Serialize audit details to JSON, redacting sensitive keys."""
+    if details is None:
+        return None
+    try:
+        return json.dumps(redact(details), ensure_ascii=True)
+    except (TypeError, ValueError):
+        return json.dumps({"_raw": _log_safe(str(details))[:1024]})
+
+
+async def audit(
+    db: AsyncSession,
     event_type: str,
     *,
     agent_email: str | None = None,
     details: dict[str, Any] | None = None,
 ) -> None:
-    """Write a security event to the audit_log table.
+    """Write a security event to the audit_log table via ORM.
 
     Args:
-        conn: sqlite3.Connection from get_connection()
+        db: AsyncSession from get_db()
         event_type: short identifier (e.g. "sanitize_reject", "auth_fail")
         agent_email: optional actor identity
         details: arbitrary dict — will be redacted + json.dumps before storage
@@ -340,26 +354,46 @@ def audit(
     Per Silas LOG-04 + LOG-05: structured JSON only, redact sensitive keys,
     fall back to {"_raw": str(...)} on serialization failure.
     """
+    from stoa.models import AuditLog
+
     safe_event = _log_safe(event_type)[:64]
     safe_email = _log_safe(agent_email)[:255] if agent_email else None
+    payload_str = prepare_audit_details(details)
 
-    if details is not None:
-        try:
-            payload_str = json.dumps(redact(details), ensure_ascii=True)
-        except (TypeError, ValueError):
-            payload_str = json.dumps({"_raw": _log_safe(str(details))[:1024]})
-    else:
-        payload_str = None
-
-    conn.execute(
-        "INSERT INTO audit_log (event_type, agent_email, details, timestamp) VALUES (?, ?, ?, ?)",
-        (safe_event, safe_email, payload_str, datetime.now(UTC).isoformat()),
+    db.add(
+        AuditLog(
+            event_type=safe_event,
+            agent_email=safe_email,
+            details=payload_str,
+            timestamp=datetime.now(UTC),
+        )
     )
-    conn.commit()
 
 
-def audit_sanitize_reject(
-    conn: sqlite3.Connection,
+def audit_log(
+    event_type: str,
+    *,
+    agent_email: str | None = None,
+    details: dict[str, Any] | None = None,
+) -> None:
+    """Log a security event via Python logging (for contexts without a session).
+
+    Used by rate_limit middleware and other places that cannot easily
+    obtain an AsyncSession.
+    """
+    safe_event = _log_safe(event_type)[:64]
+    safe_email = _log_safe(agent_email)[:255] if agent_email else None
+    payload_str = prepare_audit_details(details)
+    _audit_logger.info(
+        "audit_event event_type=%s agent_email=%s details=%s",
+        safe_event,
+        safe_email,
+        payload_str,
+    )
+
+
+async def audit_sanitize_reject(
+    db: AsyncSession,
     payload: str,
     *,
     reason: str,
@@ -367,8 +401,8 @@ def audit_sanitize_reject(
 ) -> None:
     """Convenience: log a sanitize_reject event with hash(payload), not payload."""
     payload_hash = hashlib.sha256(payload.encode("utf-8", errors="replace")).hexdigest()[:16]
-    audit(
-        conn,
+    await audit(
+        db,
         "sanitize_reject",
         agent_email=agent_email,
         details={"reason": reason, "payload_hash": payload_hash, "len": len(payload)},

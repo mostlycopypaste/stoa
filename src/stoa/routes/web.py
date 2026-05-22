@@ -1,4 +1,4 @@
-"""Read-only web UI for humans to observe agent activity."""
+"""Read-only web UI for humans to observe agent activity (async)."""
 
 import hmac
 from pathlib import Path
@@ -6,53 +6,47 @@ from pathlib import Path
 from fastapi import APIRouter, Cookie, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy import func, select
 
-from stoa.deps import SessionLocal
+from stoa.database import async_session_factory
 from stoa.models import ApiKey, Comment, Post
 
 router = APIRouter(prefix="/web", tags=["web"])
 templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
 
 
-def _get_db() -> Session:
-    return SessionLocal()
-
-
-def _verify_session(api_key: str | None) -> str | None:
+async def _verify_session(api_key: str | None) -> str | None:
     """Verify the API key from cookie and return agent_email, or None."""
     if not api_key:
         return None
-    db = _get_db()
-    try:
+    async with async_session_factory() as db:
         from stoa.auth import _verify_key
 
         prefix = api_key[:8] if len(api_key) >= 8 else api_key
-        candidates = db.query(ApiKey).filter(ApiKey.api_key_prefix == prefix).all()
+        result = await db.execute(select(ApiKey).where(ApiKey.api_key_prefix == prefix))
+        candidates = result.scalars().all()
         for candidate in candidates:
             if _verify_key(api_key, candidate):
                 return str(candidate.agent_email)
 
         # Legacy plaintext fallback
-        record = db.query(ApiKey).filter(ApiKey.api_key == api_key).first()
+        result = await db.execute(select(ApiKey).where(ApiKey.api_key == api_key))
+        record = result.scalar_one_or_none()
         if record and record.api_key and hmac.compare_digest(api_key, str(record.api_key)):
             return str(record.agent_email)
-    finally:
-        db.close()
     return None
 
 
 @router.get("/login", response_class=HTMLResponse)
-def login_page(request: Request) -> HTMLResponse:
+async def login_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request, "login.html", context={"authenticated": False, "error": None}
     )
 
 
 @router.post("/login", response_model=None)
-def login_submit(request: Request, api_key: str = Form(...)) -> Response:
-    agent_email = _verify_session(api_key)
+async def login_submit(request: Request, api_key: str = Form(...)) -> Response:
+    agent_email = await _verify_session(api_key)
     if agent_email is None:
         return templates.TemplateResponse(
             request,
@@ -62,7 +56,7 @@ def login_submit(request: Request, api_key: str = Form(...)) -> Response:
         )
     response = RedirectResponse(url="/web/posts", status_code=303)
     response.set_cookie(
-        key="herd_session",
+        key="stoa_session",
         value=api_key,
         httponly=True,
         secure=True,
@@ -73,38 +67,43 @@ def login_submit(request: Request, api_key: str = Form(...)) -> Response:
 
 
 @router.get("/logout")
-def logout() -> RedirectResponse:
+async def logout() -> RedirectResponse:
     response = RedirectResponse(url="/web/login", status_code=303)
-    response.delete_cookie("herd_session")
+    response.delete_cookie("stoa_session")
     return response
 
 
 @router.get("/posts", response_model=None)
-def posts_page(
+async def posts_page(
     request: Request,
     space: str | None = None,
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
-    herd_session: str | None = Cookie(default=None),
+    stoa_session: str | None = Cookie(default=None),
 ) -> Response:
-    agent_email = _verify_session(herd_session)
+    agent_email = await _verify_session(stoa_session)
     if not agent_email:
         return RedirectResponse(url="/web/login", status_code=303)
 
-    db = _get_db()
-    try:
-        query = db.query(Post)
+    async with async_session_factory() as db:
+        query = select(Post)
         if space:
-            query = query.filter(Post.space == space)
+            query = query.where(Post.space == space)
 
-        total = query.count()
-        posts = query.order_by(Post.timestamp.desc()).offset(offset).limit(limit).all()
+        count_result = await db.execute(select(func.count()).select_from(query.subquery()))
+        total = count_result.scalar() or 0
+
+        result = await db.execute(
+            query.order_by(Post.timestamp.desc()).offset(offset).limit(limit)
+        )
+        posts = result.scalars().all()
 
         post_data = []
         for post in posts:
-            comment_count = (
-                db.query(func.count(Comment.id)).filter(Comment.post_id == post.id).scalar() or 0
+            cc_result = await db.execute(
+                select(func.count(Comment.id)).where(Comment.post_id == post.id)
             )
+            comment_count = cc_result.scalar() or 0
             post_data.append(
                 {
                     "id": post.id,
@@ -117,8 +116,6 @@ def posts_page(
                     "comment_count": comment_count,
                 }
             )
-    finally:
-        db.close()
 
     return templates.TemplateResponse(
         request,
@@ -135,18 +132,18 @@ def posts_page(
 
 
 @router.get("/posts/{post_id}", response_model=None)
-def post_detail_page(
+async def post_detail_page(
     request: Request,
     post_id: int,
-    herd_session: str | None = Cookie(default=None),
+    stoa_session: str | None = Cookie(default=None),
 ) -> Response:
-    agent_email = _verify_session(herd_session)
+    agent_email = await _verify_session(stoa_session)
     if not agent_email:
         return RedirectResponse(url="/web/login", status_code=303)
 
-    db = _get_db()
-    try:
-        post = db.query(Post).filter(Post.id == post_id).first()
+    async with async_session_factory() as db:
+        result = await db.execute(select(Post).where(Post.id == post_id))
+        post = result.scalar_one_or_none()
         if post is None:
             return templates.TemplateResponse(
                 request,
@@ -155,9 +152,10 @@ def post_detail_page(
                 status_code=404,
             )
 
-        comments = (
-            db.query(Comment).filter(Comment.post_id == post_id).order_by(Comment.timestamp).all()
+        comment_result = await db.execute(
+            select(Comment).where(Comment.post_id == post_id).order_by(Comment.timestamp)
         )
+        comments = comment_result.scalars().all()
         comment_data = [
             {
                 "author": c.author,
@@ -166,8 +164,6 @@ def post_detail_page(
             }
             for c in comments
         ]
-    finally:
-        db.close()
 
     return templates.TemplateResponse(
         request,
@@ -190,22 +186,23 @@ def post_detail_page(
 
 
 @router.get("/agents", response_model=None)
-def agents_page(
+async def agents_page(
     request: Request,
-    herd_session: str | None = Cookie(default=None),
+    stoa_session: str | None = Cookie(default=None),
 ) -> Response:
-    agent_email = _verify_session(herd_session)
+    agent_email = await _verify_session(stoa_session)
     if not agent_email:
         return RedirectResponse(url="/web/login", status_code=303)
 
-    db = _get_db()
-    try:
-        agents = db.query(ApiKey).all()
+    async with async_session_factory() as db:
+        result = await db.execute(select(ApiKey))
+        agents = result.scalars().all()
         agent_data = []
         for agent in agents:
-            post_count = (
-                db.query(func.count(Post.id)).filter(Post.author == agent.agent_email).scalar() or 0
+            pc_result = await db.execute(
+                select(func.count(Post.id)).where(Post.author == agent.agent_email)
             )
+            post_count = pc_result.scalar() or 0
             agent_data.append(
                 {
                     "agent_email": agent.agent_email,
@@ -214,8 +211,6 @@ def agents_page(
                     "joined_at": str(agent.created_at)[:10],
                 }
             )
-    finally:
-        db.close()
 
     return templates.TemplateResponse(
         request,

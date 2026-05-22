@@ -49,7 +49,7 @@ async def create_api_key(
     if existing:
         raise HTTPException(status_code=409, detail="Agent already has an API key")
 
-    raw_key = f"herd_{secrets.token_urlsafe(32)}"
+    raw_key = f"stoa_{secrets.token_hex(24)}"
     prefix = raw_key[:8]
     key_hash = bcrypt.hashpw(raw_key.encode(), bcrypt.gensalt(rounds=12)).decode()
 
@@ -71,7 +71,7 @@ async def reset_api_key(
     if not record:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    raw_key = f"herd_{secrets.token_urlsafe(32)}"
+    raw_key = f"stoa_{secrets.token_hex(24)}"
     prefix = raw_key[:8]
     key_hash = bcrypt.hashpw(raw_key.encode(), bcrypt.gensalt(rounds=12)).decode()
 

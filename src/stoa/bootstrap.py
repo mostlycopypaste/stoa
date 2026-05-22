@@ -20,7 +20,7 @@ async def ensure_commons_exists(db: AsyncSession) -> Group:
     It is system-owned (no creator agent) and cannot be deleted.
     """
     result = await db.execute(
-        select(Group).where(Group.is_system == True, Group.name == COMMONS_GROUP_NAME)
+        select(Group).where(Group.is_system, Group.name == COMMONS_GROUP_NAME)
     )
     group = result.scalar_one_or_none()
 

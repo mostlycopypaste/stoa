@@ -1,11 +1,11 @@
-"""Admin endpoints for footer management."""
+"""Admin endpoints for footer management (async)."""
 
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from stoa.deps import get_db
+from stoa.database import get_db
 from stoa.models import FooterMessage
 from stoa.routes.admin import require_admin
 from stoa.schemas import FooterCreate, FooterResponse, FootersResponse, FooterUpdate
@@ -16,65 +16,52 @@ logger = logging.getLogger(__name__)
 
 
 @router.get("/footer")
-def get_single_footer(
+async def get_single_footer(
     category: str | None = Query(None, pattern="^(token_economics|social_proof|fomo|cheeky)$"),
     context: str | None = Query(None, pattern="^(announcement|discussion)$"),
     exclude: str | None = Query(None, description="Comma-separated list of IDs to exclude"),
     _admin: None = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> FooterResponse:
-    """Get a single footer using LRU rotation algorithm.
-
-    Query params:
-    - category: Filter by category (token_economics, social_proof, fomo, cheeky)
-    - context: Filter by context (announcement, discussion)
-    - exclude: Comma-separated list of footer IDs to exclude (e.g., "1,2,3")
-    """
+    """Get a single footer using LRU rotation algorithm."""
     exclude_ids = [int(x) for x in exclude.split(",")] if exclude else None
 
     try:
-        footer = select_footer(db, category=category, context=context, exclude_ids=exclude_ids)
+        footer = await select_footer(db, category=category, context=context, exclude_ids=exclude_ids)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
-    return FooterResponse(footer=footer.text, category=footer.category, id=footer.id)  # type: ignore[arg-type]
+    return FooterResponse(footer=footer.text, category=footer.category, id=footer.id)
 
 
 @router.get("/footers")
-def get_bulk_footers(
+async def get_bulk_footers(
     count: int = Query(..., ge=1, le=100, description="Number of footers to return"),
     category: str | None = Query(None, pattern="^(token_economics|social_proof|fomo|cheeky)$"),
     context: str | None = Query(None, pattern="^(announcement|discussion)$"),
     exclude: str | None = Query(None, description="Comma-separated list of IDs to exclude"),
     _admin: None = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> FootersResponse:
-    """Get multiple footers using LRU rotation algorithm.
-
-    Query params:
-    - count: Number of footers to return (1-100)
-    - category: Filter by category
-    - context: Filter by context
-    - exclude: Comma-separated list of footer IDs to exclude
-    """
+    """Get multiple footers using LRU rotation algorithm."""
     exclude_ids = [int(x) for x in exclude.split(",")] if exclude else None
 
     try:
-        footers = select_footers_bulk(
+        footers = await select_footers_bulk(
             db, count=count, category=category, context=context, exclude_ids=exclude_ids
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
-    footer_list = [FooterResponse(footer=f.text, category=f.category, id=f.id) for f in footers]  # type: ignore[arg-type]
+    footer_list = [FooterResponse(footer=f.text, category=f.category, id=f.id) for f in footers]
     return FootersResponse(footers=footer_list, count=len(footer_list))
 
 
 @router.post("/footers", status_code=status.HTTP_201_CREATED)
-def create_footer(
+async def create_footer(
     payload: FooterCreate,
     _admin: None = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:  # type: ignore[type-arg]
     """Create a new footer message."""
     footer = FooterMessage(
@@ -84,53 +71,59 @@ def create_footer(
         active=True,
     )
     db.add(footer)
-    db.commit()
-    db.refresh(footer)
+    await db.flush()
+    await db.refresh(footer)
 
     logger.info("Footer created: %s", footer.id)
     return {"id": footer.id, "text": footer.text, "category": footer.category}
 
 
 @router.put("/footers/{footer_id}")
-def update_footer(
+async def update_footer(
     footer_id: int,
     payload: FooterUpdate,
     _admin: None = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:  # type: ignore[type-arg]
     """Update an existing footer."""
-    footer = db.query(FooterMessage).filter_by(id=footer_id).first()
+    from sqlalchemy import select
+
+    result = await db.execute(select(FooterMessage).where(FooterMessage.id == footer_id))
+    footer = result.scalar_one_or_none()
     if not footer:
         raise HTTPException(status_code=404, detail="Footer not found")
 
     if payload.text is not None:
-        footer.text = payload.text  # type: ignore[assignment]
+        footer.text = payload.text
     if payload.category is not None:
-        footer.category = payload.category  # type: ignore[assignment]
+        footer.category = payload.category
     if payload.context is not None:
-        footer.context = payload.context  # type: ignore[assignment]
+        footer.context = payload.context
     if payload.active is not None:
-        footer.active = payload.active  # type: ignore[assignment]
+        footer.active = payload.active
 
-    db.commit()
-    db.refresh(footer)
+    await db.flush()
+    await db.refresh(footer)
 
     logger.info("Footer updated: %s", footer_id)
     return {"id": footer.id, "text": footer.text, "active": footer.active}
 
 
 @router.delete("/footers/{footer_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_footer(
+async def delete_footer(
     footer_id: int,
     _admin: None = Depends(require_admin),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> None:
     """Soft-delete a footer (set active=false)."""
-    footer = db.query(FooterMessage).filter_by(id=footer_id).first()
+    from sqlalchemy import select
+
+    result = await db.execute(select(FooterMessage).where(FooterMessage.id == footer_id))
+    footer = result.scalar_one_or_none()
     if not footer:
         raise HTTPException(status_code=404, detail="Footer not found")
 
-    footer.active = False  # type: ignore[assignment]
-    db.commit()
+    footer.active = False
+    await db.flush()
 
     logger.info("Footer soft-deleted: %s", footer_id)

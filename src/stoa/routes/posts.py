@@ -1,4 +1,4 @@
-"""Post CRUD API routes."""
+"""Post CRUD API routes (async)."""
 
 import json
 import os
@@ -6,11 +6,11 @@ import secrets
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.auth import get_current_agent
-from stoa.deps import get_db
+from stoa.database import get_db
 from stoa.models import AuditLog, Comment, Post, ReadLog, Subscription
 from stoa.schemas import (
     CommentOut,
@@ -32,10 +32,10 @@ MAX_SUBJECT_CHARS = 320
 
 
 @router.post("", response_model=PostCreated, status_code=201)
-def create_post(
+async def create_post(
     body: PostCreate,
     agent_email: str = Depends(get_current_agent),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> Post:
     """Create a new post. Author is derived from the API key."""
     subject = sanitize_short_field(body.subject, MAX_SUBJECT_CHARS)
@@ -57,19 +57,20 @@ def create_post(
         in_reply_to=body.in_reply_to,
     )
     db.add(post)
-    db.flush()
+    await db.flush()
     return post
 
 
 @router.put("/{post_id}", response_model=PostUpdated)
-def update_post(
+async def update_post(
     post_id: int,
     body: PostUpdate,
     agent_email: str = Depends(get_current_agent),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> Post:
     """Update a post. Only the original author can edit."""
-    post = db.query(Post).filter(Post.id == post_id).first()
+    result = await db.execute(select(Post).where(Post.id == post_id))
+    post = result.scalar_one_or_none()
     if post is None:
         raise HTTPException(status_code=404, detail="Post not found")
     if post.author != agent_email:
@@ -79,18 +80,17 @@ def update_post(
         raise HTTPException(status_code=409, detail="Cannot edit a closed post")
 
     if body.subject is not None:
-        post.subject = sanitize_short_field(body.subject, MAX_SUBJECT_CHARS)  # type: ignore[assignment]
+        post.subject = sanitize_short_field(body.subject, MAX_SUBJECT_CHARS)
 
     if body.body_markdown is not None:
         body_md = sanitize_input(body.body_markdown)
-        post.body_markdown = body_md  # type: ignore[assignment]
-        post.body_html = render_body_html(body_md)  # type: ignore[assignment]
-        post.tldr = generate_tldr(body_md)  # type: ignore[assignment]
-        post.token_cost = count_tokens(body_md)  # type: ignore[assignment]
+        post.body_markdown = body_md
+        post.body_html = render_body_html(body_md)
+        post.tldr = generate_tldr(body_md)
+        post.token_cost = count_tokens(body_md)
 
-    post.updated_at = datetime.now(UTC)  # type: ignore[assignment]
+    post.updated_at = datetime.now(UTC)
 
-    # Audit the edit using the same SQLAlchemy session for atomicity
     details = json.dumps(redact({"post_id": post_id}))
     db.add(
         AuditLog(
@@ -101,25 +101,24 @@ def update_post(
         )
     )
 
-    db.flush()
-
+    await db.flush()
     return post
 
 
 @router.patch("/{post_id}/status", response_model=PostDetail)
-def update_post_status(
+async def update_post_status(
     post_id: int,
     body: PostStatusUpdate,
     agent_email: str = Depends(get_current_agent),
     x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:  # type: ignore[type-arg]
     """Update post status (open/closed). Only the post author or admin can change status."""
-    post = db.query(Post).filter(Post.id == post_id).first()
+    result = await db.execute(select(Post).where(Post.id == post_id))
+    post = result.scalar_one_or_none()
     if post is None:
         raise HTTPException(status_code=404, detail="Post not found")
 
-    # Check authorization: author or admin
     is_author = post.author == agent_email
     is_admin = False
     admin_key_env = os.environ.get("STOA_ADMIN_KEY", "")
@@ -132,9 +131,8 @@ def update_post_status(
         )
 
     old_status = post.status
-    post.status = body.status  # type: ignore[assignment]
+    post.status = body.status
 
-    # Audit the status change
     actor_role = "admin" if is_admin else "author"
     details = json.dumps(
         redact(
@@ -155,23 +153,33 @@ def update_post_status(
         )
     )
 
-    db.flush()
+    await db.flush()
 
     # Build PostDetail response
+    comment_result = await db.execute(
+        select(Comment).where(Comment.post_id == post_id).order_by(Comment.timestamp)
+    )
     comments = [
         CommentOut.model_validate(c, from_attributes=True).model_copy(
             update={"token_cost": count_tokens(str(c.body_markdown))}
         )
-        for c in db.query(Comment)
-        .filter(Comment.post_id == post_id)
-        .order_by(Comment.timestamp)
-        .all()
+        for c in comment_result.scalars().all()
     ]
 
-    detail = PostDetail.model_validate(post, from_attributes=True).model_copy(
-        update={"comments": comments}
-    )
-    return detail.model_dump()
+    return {
+        "id": post.id,
+        "message_id": post.message_id,
+        "subject": post.subject,
+        "tldr": post.tldr,
+        "author": post.author,
+        "body_markdown": post.body_markdown,
+        "token_cost": post.token_cost,
+        "space": post.space,
+        "status": post.status,
+        "timestamp": post.timestamp,
+        "in_reply_to": post.in_reply_to,
+        "comments": comments,
+    }
 
 
 def _escape_like(value: str) -> str:
@@ -180,7 +188,7 @@ def _escape_like(value: str) -> str:
 
 
 @router.get("", response_model=PaginatedPosts)
-def list_posts(
+async def list_posts(
     space: str | None = Query(default=None, max_length=50),
     author: str | None = Query(default=None, max_length=255),
     keyword: str | None = Query(default=None, max_length=100),
@@ -188,16 +196,19 @@ def list_posts(
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     agent_email: str = Depends(get_current_agent),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:  # type: ignore[type-arg]
     """List posts with metadata and TLDR only (no body). Minimal token cost."""
-    query = db.query(Post)
+    from sqlalchemy import or_
+
+    query = select(Post)
 
     if subscribed:
-        subs = db.query(Subscription).filter(Subscription.agent_email == agent_email).all()
+        sub_result = await db.execute(
+            select(Subscription).where(Subscription.agent_email == agent_email)
+        )
+        subs = sub_result.scalars().all()
         if subs:
-            from sqlalchemy import or_
-
             filters = []
             for sub in subs:
                 if sub.space:
@@ -208,34 +219,44 @@ def list_posts(
                     kw_pattern = f"%{_escape_like(str(sub.keyword))}%"
                     filters.append((Post.subject.like(kw_pattern)) | (Post.tldr.like(kw_pattern)))
             if filters:
-                query = query.filter(or_(*filters))
+                query = query.where(or_(*filters))
 
     if space:
-        query = query.filter(Post.space == space)
+        query = query.where(Post.space == space)
     if author:
-        query = query.filter(Post.author == author)
+        query = query.where(Post.author == author)
     if keyword:
         pattern = f"%{_escape_like(keyword)}%"
-        query = query.filter((Post.subject.like(pattern)) | (Post.tldr.like(pattern)))
+        query = query.where((Post.subject.like(pattern)) | (Post.tldr.like(pattern)))
 
-    total = query.count()
-    posts = query.order_by(Post.timestamp.desc()).offset(offset).limit(limit).all()
+    # Count total
+    count_result = await db.execute(
+        select(func.count()).select_from(query.subquery())
+    )
+    total = count_result.scalar() or 0
 
-    read_post_ids = set()
+    # Fetch page
+    result = await db.execute(
+        query.order_by(Post.timestamp.desc()).offset(offset).limit(limit)
+    )
+    posts = result.scalars().all()
+
+    read_post_ids: set[int] = set()
     if posts:
         post_ids = [post.id for post in posts]
-        read_rows = (
-            db.query(ReadLog.post_id)
-            .filter(ReadLog.agent_email == agent_email, ReadLog.post_id.in_(post_ids))
-            .all()
+        read_result = await db.execute(
+            select(ReadLog.post_id).where(
+                ReadLog.agent_email == agent_email, ReadLog.post_id.in_(post_ids)
+            )
         )
-        read_post_ids = {row[0] for row in read_rows}
+        read_post_ids = {row[0] for row in read_result.all()}
 
     summaries = []
     for post in posts:
-        comment_count = (
-            db.query(func.count(Comment.id)).filter(Comment.post_id == post.id).scalar() or 0
+        count_res = await db.execute(
+            select(func.count(Comment.id)).where(Comment.post_id == post.id)
         )
+        comment_count = count_res.scalar() or 0
         summaries.append(
             PostSummary.model_validate(post, from_attributes=True).model_copy(
                 update={"comment_count": int(comment_count), "read": post.id in read_post_ids}
@@ -246,28 +267,32 @@ def list_posts(
 
 
 @router.get("/unread", response_model=PaginatedPosts)
-def list_unread_posts(
+async def list_unread_posts(
     space: str | None = Query(default=None, max_length=50),
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     agent_email: str = Depends(get_current_agent),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:  # type: ignore[type-arg]
     """List posts the requesting agent has NOT yet read."""
-    read_post_ids_select = db.query(ReadLog.post_id).filter(ReadLog.agent_email == agent_email)
-    query = db.query(Post).filter(Post.id.notin_(read_post_ids_select))
+    read_subquery = select(ReadLog.post_id).where(ReadLog.agent_email == agent_email)
+    query = select(Post).where(Post.id.notin_(read_subquery))
 
     if space:
-        query = query.filter(Post.space == space)
+        query = query.where(Post.space == space)
 
-    total = query.count()
-    posts = query.order_by(Post.timestamp.desc()).offset(offset).limit(limit).all()
+    count_result = await db.execute(select(func.count()).select_from(query.subquery()))
+    total = count_result.scalar() or 0
+
+    result = await db.execute(query.order_by(Post.timestamp.desc()).offset(offset).limit(limit))
+    posts = result.scalars().all()
 
     summaries = []
     for post in posts:
-        comment_count = (
-            db.query(func.count(Comment.id)).filter(Comment.post_id == post.id).scalar() or 0
+        count_res = await db.execute(
+            select(func.count(Comment.id)).where(Comment.post_id == post.id)
         )
+        comment_count = count_res.scalar() or 0
         summaries.append(
             PostSummary.model_validate(post, from_attributes=True).model_copy(
                 update={"comment_count": int(comment_count), "read": False}
@@ -278,32 +303,32 @@ def list_unread_posts(
 
 
 @router.get("/{post_id}", response_model=PostDetail)
-def get_post(
+async def get_post(
     post_id: int,
     agent_email: str = Depends(get_current_agent),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:  # type: ignore[type-arg]
     """Get full post with comments. This is where token cost is incurred."""
-    post = db.query(Post).filter(Post.id == post_id).first()
+    result = await db.execute(select(Post).where(Post.id == post_id))
+    post = result.scalar_one_or_none()
     if post is None:
         raise HTTPException(status_code=404, detail="Post not found")
 
+    comment_result = await db.execute(
+        select(Comment).where(Comment.post_id == post_id).order_by(Comment.timestamp)
+    )
     comments = [
         CommentOut.model_validate(c, from_attributes=True).model_copy(
             update={"token_cost": count_tokens(str(c.body_markdown))}
         )
-        for c in db.query(Comment)
-        .filter(Comment.post_id == post_id)
-        .order_by(Comment.timestamp)
-        .all()
+        for c in comment_result.scalars().all()
     ]
 
-    # Record read — update timestamp on re-reads so callback_flag can be cleared
-    existing = (
-        db.query(ReadLog)
-        .filter(ReadLog.agent_email == agent_email, ReadLog.post_id == post_id)
-        .first()
+    # Record read — update timestamp on re-reads
+    read_result = await db.execute(
+        select(ReadLog).where(ReadLog.agent_email == agent_email, ReadLog.post_id == post_id)
     )
+    existing = read_result.scalar_one_or_none()
     if existing is None:
         db.add(
             ReadLog(
@@ -313,30 +338,39 @@ def get_post(
             )
         )
     else:
-        # Update timestamp so callback_flag reflects the most recent read
-        existing.timestamp = datetime.now(UTC)  # type: ignore[assignment]
-        existing.tokens_consumed = int(post.token_cost)  # type: ignore[assignment]
+        existing.timestamp = datetime.now(UTC)
+        existing.tokens_consumed = int(post.token_cost)
 
-    detail = PostDetail.model_validate(post, from_attributes=True).model_copy(
-        update={"comments": comments}
-    )
-    return detail.model_dump()
+    return {
+        "id": post.id,
+        "message_id": post.message_id,
+        "subject": post.subject,
+        "tldr": post.tldr,
+        "author": post.author,
+        "body_markdown": post.body_markdown,
+        "token_cost": post.token_cost,
+        "space": post.space,
+        "status": post.status,
+        "timestamp": post.timestamp,
+        "in_reply_to": post.in_reply_to,
+        "comments": comments,
+    }
 
 
 @router.delete("/{post_id}", status_code=204)
-def delete_post(
+async def delete_post(
     post_id: int,
     agent_email: str = Depends(get_current_agent),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> None:
     """Delete a post. Only the original author can delete."""
-    post = db.query(Post).filter(Post.id == post_id).first()
+    result = await db.execute(select(Post).where(Post.id == post_id))
+    post = result.scalar_one_or_none()
     if post is None:
         raise HTTPException(status_code=404, detail="Post not found")
     if post.author != agent_email:
         raise HTTPException(status_code=403, detail="Can only delete your own posts")
 
-    # Audit the deletion using the same SQLAlchemy session for atomicity
     details = json.dumps(redact({"post_id": post_id}))
     db.add(
         AuditLog(
@@ -347,4 +381,4 @@ def delete_post(
         )
     )
 
-    db.delete(post)
+    await db.delete(post)

@@ -258,7 +258,7 @@ async def test_private_group_visible_via_agent_membership(client: AsyncClient, d
     """Private group visible if human's email matches an agent that is a member."""
     from stoa.models import ApiKey
 
-    user = await _create_verified_human(db, email="shared@example.com")
+    await _create_verified_human(db, email="shared@example.com")
 
     # Create an agent with the same email
     agent = ApiKey(agent_email="shared@example.com", is_verified=True)

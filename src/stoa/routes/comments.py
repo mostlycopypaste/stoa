@@ -1,28 +1,29 @@
-"""Comment API routes."""
+"""Comment API routes (async)."""
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.auth import get_current_agent
-from stoa.db import get_db_path
-from stoa.deps import get_db
+from stoa.database import get_db
 from stoa.models import Comment, Post
 from stoa.schemas import CommentCreate, CommentOut
-from stoa.security import audit, sanitize_input
+from stoa.security import sanitize_input
 from stoa.services import count_tokens, render_body_html
 
 router = APIRouter(prefix="/api/posts/{post_id}/comments", tags=["comments"])
 
 
 @router.post("", response_model=CommentOut, status_code=201)
-def create_comment(
+async def create_comment(
     post_id: int,
     body: CommentCreate,
     agent_email: str = Depends(get_current_agent),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:  # type: ignore[type-arg]
     """Add a comment to a post."""
-    post = db.query(Post).filter(Post.id == post_id).first()
+    result = await db.execute(select(Post).where(Post.id == post_id))
+    post = result.scalar_one_or_none()
     if post is None:
         raise HTTPException(status_code=404, detail="Post not found")
 
@@ -32,13 +33,11 @@ def create_comment(
     body_md = sanitize_input(body.body_markdown)
     body_html = render_body_html(body_md)
 
-    # Validate in_reply_to references a real comment in this post
     if body.in_reply_to is not None:
-        parent = (
-            db.query(Comment)
-            .filter(Comment.id == body.in_reply_to, Comment.post_id == post_id)
-            .first()
+        parent_result = await db.execute(
+            select(Comment).where(Comment.id == body.in_reply_to, Comment.post_id == post_id)
         )
+        parent = parent_result.scalar_one_or_none()
         if parent is None:
             raise HTTPException(
                 status_code=400,
@@ -53,7 +52,7 @@ def create_comment(
         in_reply_to=body.in_reply_to,
     )
     db.add(comment)
-    db.flush()
+    await db.flush()
 
     return (
         CommentOut.model_validate(comment, from_attributes=True)
@@ -63,19 +62,21 @@ def create_comment(
 
 
 @router.get("", response_model=list[CommentOut])
-def list_comments(
+async def list_comments(
     post_id: int,
     agent_email: str = Depends(get_current_agent),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> list[dict]:  # type: ignore[type-arg]
     """List comments for a post in chronological order."""
-    post = db.query(Post).filter(Post.id == post_id).first()
+    result = await db.execute(select(Post).where(Post.id == post_id))
+    post = result.scalar_one_or_none()
     if post is None:
         raise HTTPException(status_code=404, detail="Post not found")
 
-    comments = (
-        db.query(Comment).filter(Comment.post_id == post_id).order_by(Comment.timestamp).all()
+    comment_result = await db.execute(
+        select(Comment).where(Comment.post_id == post_id).order_by(Comment.timestamp)
     )
+    comments = comment_result.scalars().all()
     return [
         CommentOut.model_validate(c, from_attributes=True)
         .model_copy(update={"token_cost": count_tokens(str(c.body_markdown))})
@@ -85,32 +86,20 @@ def list_comments(
 
 
 @router.delete("/{comment_id}", status_code=204)
-def delete_comment(
+async def delete_comment(
     post_id: int,
     comment_id: int,
     agent_email: str = Depends(get_current_agent),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> None:
     """Delete a comment. Only the original author can delete."""
-    comment = db.query(Comment).filter(Comment.id == comment_id, Comment.post_id == post_id).first()
+    result = await db.execute(
+        select(Comment).where(Comment.id == comment_id, Comment.post_id == post_id)
+    )
+    comment = result.scalar_one_or_none()
     if comment is None:
         raise HTTPException(status_code=404, detail="Comment not found")
     if comment.author != agent_email:
         raise HTTPException(status_code=403, detail="Can only delete your own comments")
 
-    # Audit the deletion
-    import sqlite3
-
-    conn = sqlite3.connect(str(get_db_path()))
-    try:
-        audit(
-            conn,
-            "comment_deleted",
-            agent_email=agent_email,
-            details={"post_id": post_id, "comment_id": comment_id},
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-    db.delete(comment)
+    await db.delete(comment)

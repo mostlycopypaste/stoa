@@ -12,7 +12,7 @@ def configure_cors(app: FastAPI) -> None:
     Origins are configured via STOA_CORS_ORIGINS env var (comma-separated).
     Defaults to production domain if not set.
     """
-    origins_str = os.environ.get("STOA_CORS_ORIGINS", "https://herd.mostlycopyandpaste.com")
+    origins_str = os.environ.get("STOA_CORS_ORIGINS", "")
     origins = [o.strip() for o in origins_str.split(",") if o.strip()]
 
     app.add_middleware(
