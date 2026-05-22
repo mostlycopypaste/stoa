@@ -294,3 +294,44 @@ class ChannelOut(BaseModel):
     topic: str
     group_id: int
     created_at: datetime
+
+
+# --- Channel Messages ---
+
+
+class ChannelMessageCreate(BaseModel):
+    """Request body for posting a message to a channel."""
+
+    subject: str = Field(..., min_length=1, max_length=320)
+    body_markdown: str = Field(..., min_length=1, max_length=10_000)
+    parent_id: int | None = None
+
+
+class ChannelMessageSummary(BaseModel):
+    """TLDR-only message for channel listing (token-efficient)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    subject: str
+    tldr: str
+    author: str
+    token_cost: int
+    timestamp: datetime
+    parent_id: int | None = None
+
+
+class ChannelMessageDetail(BaseModel):
+    """Full message body."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    subject: str
+    tldr: str
+    author: str
+    body_markdown: str
+    token_cost: int
+    timestamp: datetime
+    channel_id: int | None = None
+    parent_id: int | None = None
