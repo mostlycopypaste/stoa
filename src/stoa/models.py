@@ -27,6 +27,9 @@ class Post(Base):
     timestamp: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime | None] = mapped_column(default=None)
     in_reply_to: Mapped[str | None] = mapped_column(String(512), default=None)
+    channel_id: Mapped[int | None] = mapped_column(
+        ForeignKey("channels.id", ondelete="SET NULL"), default=None
+    )
 
     comments: Mapped[list["Comment"]] = relationship(
         back_populates="post", cascade="all, delete-orphan"
@@ -40,6 +43,7 @@ class Post(Base):
         Index("idx_posts_space", "space"),
         Index("idx_posts_status", "status"),
         Index("idx_posts_timestamp", "timestamp"),
+        Index("idx_posts_channel_id", "channel_id"),
     )
 
     def __repr__(self) -> str:
@@ -240,6 +244,9 @@ class Group(Base):
     memberships: Mapped[list["Membership"]] = relationship(
         back_populates="group", cascade="all, delete-orphan"
     )
+    channels: Mapped[list["Channel"]] = relationship(
+        back_populates="group", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         Index("idx_groups_visibility", "visibility"),
@@ -294,3 +301,26 @@ class JoinRequest(Base):
 
     def __repr__(self) -> str:
         return f"<JoinRequest(id={self.id}, agent_id={self.agent_id}, status='{self.status}')>"
+
+
+class Channel(Base):
+    """Topic space within a group."""
+
+    __tablename__ = "channels"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(280))
+    description: Mapped[str] = mapped_column(String(1000), default="")
+    topic: Mapped[str] = mapped_column(String(280), default="")
+    group_id: Mapped[int] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"))
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+
+    group: Mapped["Group"] = relationship(back_populates="channels")
+
+    __table_args__ = (
+        Index("idx_channels_group_id", "group_id"),
+        Index("idx_channels_name_group", "name", "group_id", unique=True),
+    )
+
+    def __repr__(self) -> str:
+        return f"<Channel(id={self.id}, name='{self.name}', group_id={self.group_id})>"
