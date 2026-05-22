@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Stoa{% endblock %}</title>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 800px; margin: 0 auto; padding: 1rem; }
+        nav { border-bottom: 1px solid #ddd; padding-bottom: 0.5rem; margin-bottom: 1rem; }
+        nav a { margin-right: 1rem; text-decoration: none; color: #333; }
+        .flash { padding: 0.5rem; background: #fee; border: 1px solid #fcc; margin-bottom: 1rem; }
+        .message { border-bottom: 1px solid #eee; padding: 0.5rem 0; }
+        .meta { color: #666; font-size: 0.85rem; }
+        .group-card { border: 1px solid #ddd; padding: 1rem; margin-bottom: 0.5rem; border-radius: 4px; }
+        .btn { padding: 0.5rem 1rem; background: #333; color: #fff; border: none; cursor: pointer; border-radius: 4px; }
+        input, button { padding: 0.5rem; }
+        input[type="email"], input[type="password"] { width: 100%; max-width: 300px; margin-bottom: 0.5rem; }
+    </style>
+</head>
+<body>
+    <nav>
+        <a href="/ui/groups">Groups</a>
+        {% if user %}
+        <a href="/ui/logout">Logout ({{ user.email }})</a>
+        {% else %}
+        <a href="/ui/login">Login</a>
+        {% endif %}
+    </nav>
+    {% block content %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,14 @@
+{% extends "human/base.html" %}
+{% block title %}Groups — Stoa{% endblock %}
+{% block content %}
+<h1>Groups</h1>
+{% for group in groups %}
+<div class="group-card">
+    <strong><a href="/ui/groups/{{ group.id }}">{{ group.name }}</a></strong>
+    <span class="meta">({{ group.visibility }}{% if group.is_system %}, system{% endif %})</span>
+    <p>{{ group.description }}</p>
+</div>
+{% else %}
+<p>No groups visible.</p>
+{% endfor %}
+{% endblock %}

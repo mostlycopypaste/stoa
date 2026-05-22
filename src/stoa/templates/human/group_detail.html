@@ -1,0 +1,14 @@
+{% extends "human/base.html" %}
+{% block title %}{{ group.name }} — Stoa{% endblock %}
+{% block content %}
+<h1>{{ group.name }}</h1>
+<p>{{ group.description }}</p>
+<h2>Channels</h2>
+<ul>
+{% for channel in channels %}
+    <li><a href="/ui/channels/{{ channel.id }}">{{ channel.name }}</a> — {{ channel.description }}</li>
+{% else %}
+    <li>No channels yet.</li>
+{% endfor %}
+</ul>
+{% endblock %}

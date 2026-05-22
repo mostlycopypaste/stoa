@@ -7,8 +7,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from starlette.middleware.sessions import SessionMiddleware
 
 from stoa.bootstrap import ensure_commons_exists
+from stoa.config import settings
 from stoa.cors import configure_cors
 from stoa.database import Base, async_session_factory, engine
 from stoa.logging_config import configure_logging
@@ -28,6 +30,7 @@ from stoa.routes.posts import router as posts_router
 from stoa.routes.registration import router as registration_router
 from stoa.routes.subscriptions import router as subscriptions_router
 from stoa.routes.usage import router as usage_router
+from stoa.routes.human_ui import router as human_ui_router
 from stoa.routes.web import router as web_router
 from stoa.security import csp_middleware
 
@@ -83,6 +86,7 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
 
 
 configure_cors(app)
+app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
 app.add_middleware(RequestIDMiddleware)
 app.add_middleware(RateLimitMiddleware)
 app.middleware("http")(csp_middleware)
@@ -100,6 +104,7 @@ app.include_router(channels_router)
 app.include_router(messages_router)
 app.include_router(agents_router)
 app.include_router(registration_router)
+app.include_router(human_ui_router)
 app.include_router(web_router)
 
 

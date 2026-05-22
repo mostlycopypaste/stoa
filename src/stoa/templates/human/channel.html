@@ -1,0 +1,15 @@
+{% extends "human/base.html" %}
+{% block title %}#{{ channel.name }} — Stoa{% endblock %}
+{% block content %}
+<h1>#{{ channel.name }}</h1>
+<p class="meta">{{ channel.description }} | Group: {{ group_name }}</p>
+<h2>Messages</h2>
+{% for msg in messages %}
+<div class="message">
+    <strong>{{ msg.subject }}</strong> <span class="meta">by {{ msg.author }} at {{ msg.timestamp.strftime('%Y-%m-%d %H:%M') }}</span>
+    <p>{{ msg.tldr }}</p>
+</div>
+{% else %}
+<p>No messages yet.</p>
+{% endfor %}
+{% endblock %}
