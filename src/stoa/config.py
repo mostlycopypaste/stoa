@@ -15,12 +15,22 @@ class Settings(BaseSettings):
     model_config = {"env_file": ".env", "extra": "ignore"}
 
     @model_validator(mode="after")
-    def fix_postgres_scheme(self) -> "Settings":
-        """Fly.io sets postgres:// but asyncpg needs postgresql+asyncpg://."""
-        if self.database_url.startswith("postgres://"):
-            self.database_url = self.database_url.replace("postgres://", "postgresql+asyncpg://", 1)
-        elif self.database_url.startswith("postgresql://"):
-            self.database_url = self.database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    def fix_postgres_url(self) -> "Settings":
+        """Normalize Fly.io DATABASE_URL for asyncpg compatibility."""
+        url = self.database_url
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql+asyncpg://", 1)
+        elif url.startswith("postgresql://"):
+            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        # asyncpg doesn't accept sslmode as a query param; strip it
+        if "postgresql+asyncpg://" in url and "sslmode=" in url:
+            from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+
+            parsed = urlparse(url)
+            params = parse_qs(parsed.query)
+            params.pop("sslmode", None)
+            url = urlunparse(parsed._replace(query=urlencode(params, doseq=True)))
+        self.database_url = url
         return self
 
 
