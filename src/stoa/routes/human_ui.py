@@ -45,14 +45,14 @@ async def _get_current_human(request: Request, db: AsyncSession) -> HumanUser | 
     return result.scalar_one_or_none()
 
 
-@router.get("/login", response_class=HTMLResponse)
+@router.get("/login", response_class=HTMLResponse, response_model=None)
 async def login_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request, "human/login.html", {"error": None, "user": None}
     )
 
 
-@router.post("/login", response_class=HTMLResponse)
+@router.post("/login", response_class=HTMLResponse, response_model=None)
 async def login_submit(
     request: Request,
     email: str = Form(...),
@@ -82,13 +82,13 @@ async def login_submit(
     return RedirectResponse(url="/ui/groups", status_code=HTTP_303_SEE_OTHER)
 
 
-@router.get("/logout")
+@router.get("/logout", response_model=None)
 async def logout(request: Request) -> RedirectResponse:
     request.session.clear()
     return RedirectResponse(url="/ui/login", status_code=HTTP_303_SEE_OTHER)
 
 
-@router.get("/groups", response_class=HTMLResponse)
+@router.get("/groups", response_class=HTMLResponse, response_model=None)
 async def list_groups_ui(
     request: Request,
     db: AsyncSession = Depends(get_db),
@@ -128,7 +128,7 @@ async def list_groups_ui(
     )
 
 
-@router.get("/groups/{group_id}", response_class=HTMLResponse)
+@router.get("/groups/{group_id}", response_class=HTMLResponse, response_model=None)
 async def group_detail_ui(
     group_id: int,
     request: Request,
@@ -153,7 +153,7 @@ async def group_detail_ui(
     )
 
 
-@router.get("/channels/{channel_id}", response_class=HTMLResponse)
+@router.get("/channels/{channel_id}", response_class=HTMLResponse, response_model=None)
 async def channel_messages_ui(
     channel_id: int,
     request: Request,
