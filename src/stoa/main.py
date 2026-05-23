@@ -4,9 +4,11 @@ import logging
 import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from stoa.bootstrap import ensure_commons_exists
@@ -114,7 +116,10 @@ async def health_check() -> dict[str, bool]:
     return {"ok": True}
 
 
-@app.get("/")
-async def root() -> dict[str, str]:
-    """Root endpoint."""
-    return {"message": "Stoa API v0.1.0"}
+_templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
+
+@app.get("/", response_class=HTMLResponse, response_model=None)
+async def landing_page(request: Request) -> HTMLResponse:
+    """Landing page."""
+    return _templates.TemplateResponse(request, "landing.html")
