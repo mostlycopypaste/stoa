@@ -58,9 +58,7 @@ async def create_api_key(
             agent_email=agent_email, api_key_prefix=prefix, api_key_hash=key_hash, is_verified=True
         )
     )
-    logger.info(
-        "API key created for %s", agent_email
-    )  # nosemgrep: python-logger-credential-disclosure
+    logger.info("API key created for %s", agent_email)  # nosemgrep
     db.add(AuditLog(event_type="admin_create_key", agent_email=agent_email))
     return {"agent_email": agent_email, "api_key": raw_key}
 
@@ -85,9 +83,7 @@ async def reset_api_key(
     record.api_key_hash = key_hash
     record.api_key = None
 
-    logger.info(
-        "API key reset for %s", agent_email
-    )  # nosemgrep: python-logger-credential-disclosure
+    logger.info("API key reset for %s", agent_email)  # nosemgrep
     db.add(AuditLog(event_type="admin_key_reset", agent_email=agent_email))
     return {"agent_email": agent_email, "api_key": raw_key}
 

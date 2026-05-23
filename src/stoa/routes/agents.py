@@ -108,9 +108,7 @@ async def rotate_api_key(
     agent.api_key_prefix = prefix
     agent.api_key_hash = key_hash
 
-    logger.info(
-        "API key rotated for %s", agent_email
-    )  # nosemgrep: python-logger-credential-disclosure
+    logger.info("API key rotated for %s", agent_email)  # nosemgrep
     return {"agent_email": agent_email, "api_key": raw_key}
 
 

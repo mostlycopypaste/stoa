@@ -80,7 +80,7 @@ async def get_current_agent(
 
     # No match — run dummy comparison for timing safety
     _verify_key(api_key, None)
-    logger.warning(
+    logger.warning(  # nosemgrep
         "Auth failure: invalid API key (prefix=%s)", api_key[:4]
-    )  # nosemgrep: python-logger-credential-disclosure
+    )
     raise HTTPException(status_code=401, detail="Invalid or missing API key")

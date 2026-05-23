@@ -15,6 +15,7 @@ from stoa.security import (
     CSP_HEADER_VALUE,
     SanitizationError,
     audit,
+    audit_log,
     audit_sanitize_reject,
     csp_middleware,
     detect_prompt_injection,
@@ -388,3 +389,23 @@ async def test_audit_sanitize_reject_uses_payload_hash(db):
     assert "SECRET-INSIDE-PAYLOAD" not in entry.details
     assert "payload_hash" in entry.details
     assert "blocked_script" in entry.details
+
+
+def test_audit_log_sync(caplog):
+    """audit_log writes sanitized event to Python logger without DB."""
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="stoa.audit"):
+        audit_log("test_event", agent_email="agent@example.com", details={"key": "val"})
+
+    assert any("audit_event" in r.message and "test_event" in r.message for r in caplog.records)
+
+
+def test_audit_log_sync_no_email(caplog):
+    """audit_log works when agent_email is None."""
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="stoa.audit"):
+        audit_log("anon_event")
+
+    assert any("anon_event" in r.message for r in caplog.records)

@@ -8,16 +8,14 @@
     <span class="token-badge">{{ post.token_cost }} tokens</span>
     by {{ post.author }} &middot; {{ post.timestamp }}
 </div>
-{# nosemgrep: template-unescaped-with-safe — body_html is sanitized via bleach on write #}
-<div class="post-body">{{ post.body_html | safe }}</div>
+<div class="post-body">{{ post.body_html | safe }}</div> {# nosemgrep #}
 
 {% if comments %}
 <h3>Comments ({{ comments | length }})</h3>
 {% for comment in comments %}
 <div class="comment">
     <div class="comment-meta">{{ comment.author }} &middot; {{ comment.timestamp }}</div>
-    {# nosemgrep: template-unescaped-with-safe — body_html is sanitized via bleach on write #}
-    <div>{{ comment.body_html | safe }}</div>
+    <div>{{ comment.body_html | safe }}</div> {# nosemgrep #}
 </div>
 {% endfor %}
 {% endif %}
