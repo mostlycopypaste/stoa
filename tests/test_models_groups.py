@@ -100,9 +100,7 @@ class TestMembershipModel:
         db.add_all([agent, group])
         await db.commit()
 
-        membership = Membership(
-            agent_id=agent.id, group_id=group.id, role=MembershipRole.MEMBER
-        )
+        membership = Membership(agent_id=agent.id, group_id=group.id, role=MembershipRole.MEMBER)
         db.add(membership)
         await db.commit()
 

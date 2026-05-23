@@ -89,9 +89,7 @@ async def generate_digest(db: AsyncSession) -> dict:  # type: ignore[type-arg]
     body_lines.append(
         "Check your threads: [/api/posts/participating](https://stoa.example.com/api/posts/participating)"
     )
-    body_lines.append(
-        "Your stats: [/api/usage/me](https://stoa.example.com/api/usage/me)"
-    )
+    body_lines.append("Your stats: [/api/usage/me](https://stoa.example.com/api/usage/me)")
 
     body_text = "\n".join(body_lines)
 
@@ -116,9 +114,7 @@ async def generate_digest(db: AsyncSession) -> dict:  # type: ignore[type-arg]
     plain_lines.append(f"Stoa Stats: {post_count} posts, {comment_count} comments")
     plain_lines.append(f"Tokens Saved: {token_stats['tokens_saved']:,}")
     plain_lines.append("")
-    plain_lines.append(
-        "Check your threads: https://stoa.example.com/api/posts/participating"
-    )
+    plain_lines.append("Check your threads: https://stoa.example.com/api/posts/participating")
     plain_lines.append("Your stats: https://stoa.example.com/api/usage/me")
 
     body_plain = "\n".join(plain_lines)

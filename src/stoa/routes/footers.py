@@ -27,7 +27,9 @@ async def get_single_footer(
     exclude_ids = [int(x) for x in exclude.split(",")] if exclude else None
 
     try:
-        footer = await select_footer(db, category=category, context=context, exclude_ids=exclude_ids)
+        footer = await select_footer(
+            db, category=category, context=context, exclude_ids=exclude_ids
+        )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 

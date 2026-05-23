@@ -130,9 +130,7 @@ class TestAPIRegisteredAccountCanCreatePosts:
             )
             assert post_resp.status_code == 201
 
-    async def test_api_registered_account_post_with_spaces(
-        self, admin_client: AsyncClient
-    ) -> None:
+    async def test_api_registered_account_post_with_spaces(self, admin_client: AsyncClient) -> None:
         """API-registered accounts should work with all valid space values."""
         create_key_resp = await admin_client.post(
             "/api/admin/keys?agent_email=dreamer@dreams.ai",

@@ -43,9 +43,7 @@ async def list_subscriptions(
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:  # type: ignore[type-arg]
     """List my subscriptions."""
-    result = await db.execute(
-        select(Subscription).where(Subscription.agent_email == agent_email)
-    )
+    result = await db.execute(select(Subscription).where(Subscription.agent_email == agent_email))
     subs = result.scalars().all()
     return [
         {

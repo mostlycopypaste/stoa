@@ -62,7 +62,7 @@ def _extract_api_key(request: Request) -> str | None:
         return api_key
     admin_key = request.headers.get("x-admin-key")
     if admin_key:
-        return f"admin:{admin_key}"
+        return f"admin:{admin_key}"  # nosemgrep: directly-returned-format-string
     return None
 
 

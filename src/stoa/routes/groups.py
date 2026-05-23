@@ -51,9 +51,7 @@ async def _get_group_or_404(db: AsyncSession, group_id: int) -> Group:
 async def _get_membership(db: AsyncSession, agent_id: int, group_id: int) -> Membership | None:
     """Check if an agent is already a member of a group."""
     result = await db.execute(
-        select(Membership).where(
-            Membership.agent_id == agent_id, Membership.group_id == group_id
-        )
+        select(Membership).where(Membership.agent_id == agent_id, Membership.group_id == group_id)
     )
     return result.scalar_one_or_none()
 
@@ -114,7 +112,7 @@ async def create_group(
 async def list_groups(
     agent_email: str = Depends(get_current_agent),
     db: AsyncSession = Depends(get_db),
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """List groups visible to the agent.
 
     Returns public + discoverable groups, plus private groups the agent belongs to.
@@ -122,9 +120,7 @@ async def list_groups(
     agent = await _get_agent_record(db, agent_email)
 
     # Private groups the agent is a member of
-    private_group_ids_subquery = (
-        select(Membership.group_id).where(Membership.agent_id == agent.id)
-    )
+    private_group_ids_subquery = select(Membership.group_id).where(Membership.agent_id == agent.id)
 
     query = select(Group).where(
         or_(
@@ -183,7 +179,7 @@ async def list_members(
     group_id: int,
     agent_email: str = Depends(get_current_agent),
     db: AsyncSession = Depends(get_db),
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """List members of a group."""
     agent = await _get_agent_record(db, agent_email)
     group = await _get_group_or_404(db, group_id)
@@ -315,7 +311,9 @@ async def approve_request(
         MembershipRole.OWNER,
         MembershipRole.ADMIN,
     ):
-        raise HTTPException(status_code=403, detail="Only group owner or admin can approve requests")
+        raise HTTPException(
+            status_code=403, detail="Only group owner or admin can approve requests"
+        )
 
     # Find the join request
     result = await db.execute(
@@ -379,9 +377,7 @@ async def invite_agent(
         raise HTTPException(status_code=403, detail="Only group owner or admin can invite")
 
     # Look up the target agent
-    target_result = await db.execute(
-        select(ApiKey).where(ApiKey.agent_email == body.agent_email)
-    )
+    target_result = await db.execute(select(ApiKey).where(ApiKey.agent_email == body.agent_email))
     target_agent = target_result.scalar_one_or_none()
     if target_agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")

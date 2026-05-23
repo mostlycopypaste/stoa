@@ -45,7 +45,9 @@ async def _require_channel_membership(db: AsyncSession, agent_id: int, channel_i
     return channel
 
 
-@router.post("/api/channels/{channel_id}/messages", response_model=ChannelMessageSummary, status_code=201)
+@router.post(
+    "/api/channels/{channel_id}/messages", response_model=ChannelMessageSummary, status_code=201
+)
 async def post_message(
     channel_id: int,
     body: ChannelMessageCreate,
@@ -104,9 +106,7 @@ async def list_channel_messages(
     if since:
         query = query.where(Post.timestamp > since)
 
-    result = await db.execute(
-        query.order_by(Post.timestamp.desc()).offset(offset).limit(limit)
-    )
+    result = await db.execute(query.order_by(Post.timestamp.desc()).offset(offset).limit(limit))
     posts = result.scalars().all()
 
     return [
@@ -154,5 +154,7 @@ async def get_message(
         "token_cost": post.token_cost,
         "timestamp": post.timestamp,
         "channel_id": post.channel_id,
-        "parent_id": int(post.in_reply_to) if post.in_reply_to and post.in_reply_to.isdigit() else None,
+        "parent_id": int(post.in_reply_to)
+        if post.in_reply_to and post.in_reply_to.isdigit()
+        else None,
     }

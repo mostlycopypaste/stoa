@@ -230,15 +230,11 @@ async def list_posts(
         query = query.where((Post.subject.like(pattern)) | (Post.tldr.like(pattern)))
 
     # Count total
-    count_result = await db.execute(
-        select(func.count()).select_from(query.subquery())
-    )
+    count_result = await db.execute(select(func.count()).select_from(query.subquery()))
     total = count_result.scalar() or 0
 
     # Fetch page
-    result = await db.execute(
-        query.order_by(Post.timestamp.desc()).offset(offset).limit(limit)
-    )
+    result = await db.execute(query.order_by(Post.timestamp.desc()).offset(offset).limit(limit))
     posts = result.scalars().all()
 
     read_post_ids: set[int] = set()

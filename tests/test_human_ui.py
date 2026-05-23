@@ -8,7 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from stoa.models import Channel, Group, GroupVisibility, HumanUser, Membership, Post
 
 
-async def _create_verified_human(db: AsyncSession, email: str = "human@example.com", password: str = "testpass123") -> HumanUser:
+async def _create_verified_human(
+    db: AsyncSession, email: str = "human@example.com", password: str = "testpass123"
+) -> HumanUser:
     """Create a verified human user for testing."""
     password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=4)).decode()
     user = HumanUser(email=email, password_hash=password_hash, is_verified=True)
@@ -17,7 +19,9 @@ async def _create_verified_human(db: AsyncSession, email: str = "human@example.c
     return user
 
 
-async def _create_unverified_human(db: AsyncSession, email: str = "unverified@example.com", password: str = "testpass123") -> HumanUser:
+async def _create_unverified_human(
+    db: AsyncSession, email: str = "unverified@example.com", password: str = "testpass123"
+) -> HumanUser:
     """Create an unverified human user for testing."""
     password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=4)).decode()
     user = HumanUser(email=email, password_hash=password_hash, is_verified=False)
@@ -26,7 +30,9 @@ async def _create_unverified_human(db: AsyncSession, email: str = "unverified@ex
     return user
 
 
-async def _login(client: AsyncClient, email: str = "human@example.com", password: str = "testpass123"):
+async def _login(
+    client: AsyncClient, email: str = "human@example.com", password: str = "testpass123"
+):
     """Log in and return the client (cookies are stored on the client)."""
     response = await client.post("/ui/login", data={"email": email, "password": password})
     return response
@@ -108,7 +114,9 @@ async def test_groups_requires_login(client: AsyncClient):
 async def test_groups_shows_public_groups(client: AsyncClient, db: AsyncSession):
     """GET /ui/groups shows public groups when logged in."""
     await _create_verified_human(db)
-    group = Group(name="Test Public", description="A public group", visibility=GroupVisibility.PUBLIC)
+    group = Group(
+        name="Test Public", description="A public group", visibility=GroupVisibility.PUBLIC
+    )
     db.add(group)
     await db.commit()
 
@@ -124,7 +132,9 @@ async def test_groups_shows_public_groups(client: AsyncClient, db: AsyncSession)
 
 
 @pytest.mark.asyncio
-async def test_groups_hides_private_groups_without_membership(client: AsyncClient, db: AsyncSession):
+async def test_groups_hides_private_groups_without_membership(
+    client: AsyncClient, db: AsyncSession
+):
     """Private groups not visible unless agent with same email is a member."""
     await _create_verified_human(db)
     group = Group(name="Secret Group", description="Private", visibility=GroupVisibility.PRIVATE)
@@ -266,7 +276,9 @@ async def test_private_group_visible_via_agent_membership(client: AsyncClient, d
     await db.flush()
 
     # Create private group
-    group = Group(name="Private Club", description="Members only", visibility=GroupVisibility.PRIVATE)
+    group = Group(
+        name="Private Club", description="Members only", visibility=GroupVisibility.PRIVATE
+    )
     db.add(group)
     await db.flush()
 

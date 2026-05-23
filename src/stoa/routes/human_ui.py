@@ -47,9 +47,7 @@ async def _get_current_human(request: Request, db: AsyncSession) -> HumanUser | 
 
 @router.get("/login", response_class=HTMLResponse, response_model=None)
 async def login_page(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(
-        request, "human/login.html", {"error": None, "user": None}
-    )
+    return templates.TemplateResponse(request, "human/login.html", {"error": None, "user": None})
 
 
 @router.post("/login", response_class=HTMLResponse, response_model=None)
@@ -100,15 +98,11 @@ async def list_groups_ui(
     # Find groups visible to this human:
     # Public + discoverable groups, plus private groups where agents
     # sharing the human's email are members.
-    agent_result = await db.execute(
-        select(ApiKey.id).where(ApiKey.agent_email == user.email)
-    )
+    agent_result = await db.execute(select(ApiKey.id).where(ApiKey.agent_email == user.email))
     agent_ids = [row[0] for row in agent_result.all()]
 
     if agent_ids:
-        private_group_ids = select(Membership.group_id).where(
-            Membership.agent_id.in_(agent_ids)
-        )
+        private_group_ids = select(Membership.group_id).where(Membership.agent_id.in_(agent_ids))
         query = select(Group).where(
             or_(
                 Group.visibility.in_([GroupVisibility.PUBLIC, GroupVisibility.DISCOVERABLE]),

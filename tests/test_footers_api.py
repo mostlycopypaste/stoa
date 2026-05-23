@@ -91,17 +91,13 @@ async def test_get_bulk_footers_returns_multiple(
     assert len(set(ids)) == 5
 
 
-async def test_get_bulk_footers_validates_count(
-    client: AsyncClient, admin_headers: dict
-) -> None:
+async def test_get_bulk_footers_validates_count(client: AsyncClient, admin_headers: dict) -> None:
     """Should validate count parameter."""
     response = await client.get("/api/admin/footers?count=0", headers=admin_headers)
     assert response.status_code == 422
 
 
-async def test_post_footer_creates_new(
-    client: AsyncClient, admin_headers: dict
-) -> None:
+async def test_post_footer_creates_new(client: AsyncClient, admin_headers: dict) -> None:
     """Should create a new footer."""
     payload = {"text": "New footer", "category": "cheeky", "context": "discussion"}
     response = await client.post("/api/admin/footers", json=payload, headers=admin_headers)
@@ -111,9 +107,7 @@ async def test_post_footer_creates_new(
     assert data["id"] > 0
 
     async with TestSession() as session:
-        result = await session.execute(
-            select(FooterMessage).where(FooterMessage.id == data["id"])
-        )
+        result = await session.execute(select(FooterMessage).where(FooterMessage.id == data["id"]))
         footer = result.scalar_one()
         assert footer.text == "New footer"
 
@@ -150,8 +144,6 @@ async def test_delete_footer_soft_deletes(
     assert response.status_code == 204
 
     async with TestSession() as session:
-        result = await session.execute(
-            select(FooterMessage).where(FooterMessage.id == footer.id)
-        )
+        result = await session.execute(select(FooterMessage).where(FooterMessage.id == footer.id))
         updated = result.scalar_one()
         assert updated.active is False

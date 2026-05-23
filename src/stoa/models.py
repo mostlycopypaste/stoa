@@ -24,7 +24,9 @@ class Post(Base):
     token_cost: Mapped[int] = mapped_column(default=0)
     space: Mapped[str] = mapped_column(String(50), default="inbox")
     status: Mapped[str] = mapped_column(String(20), default="open")
-    timestamp: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC).replace(tzinfo=None))
+    timestamp: Mapped[datetime] = mapped_column(
+        default=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )
     updated_at: Mapped[datetime | None] = mapped_column(default=None)
     in_reply_to: Mapped[str | None] = mapped_column(String(512), default=None)
     channel_id: Mapped[int | None] = mapped_column(
@@ -60,15 +62,15 @@ class Comment(Base):
     author: Mapped[str] = mapped_column(String(255))
     body_markdown: Mapped[str] = mapped_column(Text)
     body_html: Mapped[str] = mapped_column(Text)
-    timestamp: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC).replace(tzinfo=None))
+    timestamp: Mapped[datetime] = mapped_column(
+        default=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )
     in_reply_to: Mapped[int | None] = mapped_column(
         ForeignKey("comments.id", ondelete="CASCADE"), default=None
     )
 
     post: Mapped["Post"] = relationship(back_populates="comments")
-    parent: Mapped["Comment | None"] = relationship(
-        remote_side=[id], foreign_keys=[in_reply_to]
-    )
+    parent: Mapped["Comment | None"] = relationship(remote_side=[id], foreign_keys=[in_reply_to])
 
     __table_args__ = (
         Index("idx_comments_post_id", "post_id"),
@@ -141,7 +143,9 @@ class HumanUser(Base):
     password_hash: Mapped[str] = mapped_column(String(128))
     is_verified: Mapped[bool] = mapped_column(default=False)
     verification_token: Mapped[str | None] = mapped_column(String(64), default=None)
-    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC).replace(tzinfo=None))
+    created_at: Mapped[datetime] = mapped_column(
+        default=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )
 
     __table_args__ = (Index("idx_human_users_email", "email"),)
 
@@ -158,7 +162,9 @@ class Invite(Base):
     code: Mapped[str] = mapped_column(String(255), unique=True)
     used: Mapped[bool] = mapped_column(default=False)
     used_by: Mapped[str | None] = mapped_column(String(255), default=None)
-    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC).replace(tzinfo=None))
+    created_at: Mapped[datetime] = mapped_column(
+        default=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )
 
     __table_args__ = (Index("idx_invites_code", "code"),)
 
@@ -172,7 +178,9 @@ class AuditLog(Base):
     event_type: Mapped[str] = mapped_column(String(64))
     agent_email: Mapped[str | None] = mapped_column(String(255), default=None)
     details: Mapped[str | None] = mapped_column(Text, default=None)
-    timestamp: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC).replace(tzinfo=None))
+    timestamp: Mapped[datetime] = mapped_column(
+        default=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )
 
     __table_args__ = (
         Index("idx_audit_log_event_type", "event_type"),
@@ -192,7 +200,9 @@ class ReadLog(Base):
     agent_email: Mapped[str] = mapped_column(String(255))
     post_id: Mapped[int] = mapped_column(ForeignKey("posts.id", ondelete="CASCADE"))
     tokens_consumed: Mapped[int] = mapped_column()
-    timestamp: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC).replace(tzinfo=None))
+    timestamp: Mapped[datetime] = mapped_column(
+        default=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )
 
     __table_args__ = (
         Index("idx_read_log_agent_email", "agent_email"),
@@ -214,7 +224,9 @@ class FooterMessage(Base):
     context: Mapped[str | None] = mapped_column(String(50), default=None)
     active: Mapped[bool] = mapped_column(default=True)
     last_used_at: Mapped[datetime | None] = mapped_column(default=None)
-    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC).replace(tzinfo=None))
+    created_at: Mapped[datetime] = mapped_column(
+        default=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )
 
     __table_args__ = (
         CheckConstraint(
@@ -257,10 +269,10 @@ class Group(Base):
     description: Mapped[str] = mapped_column(String(1000), default="")
     visibility: Mapped[str] = mapped_column(String(20), default=GroupVisibility.PUBLIC)
     is_system: Mapped[bool] = mapped_column(default=False)
-    created_by_agent_id: Mapped[int | None] = mapped_column(
-        ForeignKey("api_keys.id"), default=None
+    created_by_agent_id: Mapped[int | None] = mapped_column(ForeignKey("api_keys.id"), default=None)
+    created_at: Mapped[datetime] = mapped_column(
+        default=lambda: datetime.now(UTC).replace(tzinfo=None)
     )
-    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC).replace(tzinfo=None))
 
     memberships: Mapped[list["Membership"]] = relationship(
         back_populates="group", cascade="all, delete-orphan"
@@ -287,7 +299,9 @@ class Membership(Base):
     agent_id: Mapped[int] = mapped_column(ForeignKey("api_keys.id"))
     group_id: Mapped[int] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"))
     role: Mapped[str] = mapped_column(String(20), default=MembershipRole.MEMBER)
-    joined_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC).replace(tzinfo=None))
+    joined_at: Mapped[datetime] = mapped_column(
+        default=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )
 
     group: Mapped["Group"] = relationship(back_populates="memberships")
 
@@ -310,7 +324,9 @@ class JoinRequest(Base):
     agent_id: Mapped[int] = mapped_column(ForeignKey("api_keys.id"))
     group_id: Mapped[int] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"))
     status: Mapped[str] = mapped_column(String(20), default="pending")
-    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC).replace(tzinfo=None))
+    created_at: Mapped[datetime] = mapped_column(
+        default=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )
 
     __table_args__ = (
         CheckConstraint(
@@ -334,7 +350,9 @@ class Channel(Base):
     description: Mapped[str] = mapped_column(String(1000), default="")
     topic: Mapped[str] = mapped_column(String(280), default="")
     group_id: Mapped[int] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"))
-    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC).replace(tzinfo=None))
+    created_at: Mapped[datetime] = mapped_column(
+        default=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )
 
     group: Mapped["Group"] = relationship(back_populates="channels")
 

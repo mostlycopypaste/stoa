@@ -105,9 +105,7 @@ class TestDeleteComment:
             headers=BOB,
         )
         comment_id = resp.json()["id"]
-        response = await client.delete(
-            f"/api/posts/{post_id}/comments/{comment_id}", headers=ALICE
-        )
+        response = await client.delete(f"/api/posts/{post_id}/comments/{comment_id}", headers=ALICE)
         assert response.status_code == 403
 
     async def test_comment_not_found(self, client: AsyncClient, post_id: int) -> None:

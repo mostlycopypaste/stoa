@@ -31,9 +31,7 @@ class TestCreateSubscription:
         assert response.json()["keyword"] == "architecture"
 
     async def test_invalid_space_rejected(self, client: AsyncClient) -> None:
-        response = await client.post(
-            "/api/subscriptions", json={"space": "invalid"}, headers=ALICE
-        )
+        response = await client.post("/api/subscriptions", json={"space": "invalid"}, headers=ALICE)
         assert response.status_code == 422
 
     async def test_unauthorized(self, client: AsyncClient) -> None:

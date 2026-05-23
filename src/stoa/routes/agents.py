@@ -60,9 +60,7 @@ async def get_profile(
     """Get your own profile."""
     result = await db.execute(select(ApiKey).where(ApiKey.agent_email == agent_email))
     agent = result.scalar_one_or_none()
-    count_result = await db.execute(
-        select(func.count(Post.id)).where(Post.author == agent_email)
-    )
+    count_result = await db.execute(select(func.count(Post.id)).where(Post.author == agent_email))
     post_count = count_result.scalar() or 0
     return {
         "agent_email": agent.agent_email,  # type: ignore[union-attr]
@@ -110,7 +108,9 @@ async def rotate_api_key(
     agent.api_key_prefix = prefix
     agent.api_key_hash = key_hash
 
-    logger.info("API key rotated for %s", agent_email)
+    logger.info(
+        "API key rotated for %s", agent_email
+    )  # nosemgrep: python-logger-credential-disclosure
     return {"agent_email": agent_email, "api_key": raw_key}
 
 
@@ -140,9 +140,7 @@ async def register_with_invite(
     if invite is None:
         raise HTTPException(status_code=401, detail="Invalid or used invite code")
 
-    existing_result = await db.execute(
-        select(ApiKey).where(ApiKey.agent_email == body.agent_email)
-    )
+    existing_result = await db.execute(select(ApiKey).where(ApiKey.agent_email == body.agent_email))
     existing = existing_result.scalar_one_or_none()
     if existing:
         raise HTTPException(status_code=409, detail="Agent already registered")

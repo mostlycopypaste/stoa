@@ -26,9 +26,7 @@ async def test_agent_auto_joins_commons_on_verification(client, db):
     verification_token = data["verification_token"]
 
     # Get the agent's ID
-    result = await db.execute(
-        select(Group).where(Group.is_system)
-    )
+    result = await db.execute(select(Group).where(Group.is_system))
     commons = result.scalar_one()
 
     # Verify the agent's email
@@ -38,6 +36,7 @@ async def test_agent_auto_joins_commons_on_verification(client, db):
 
     # Check that the agent is now a member of The Stoa
     from stoa.models import ApiKey
+
     agent_result = await db.execute(
         select(ApiKey).where(ApiKey.agent_email == "newagent@example.com")
     )
@@ -78,9 +77,8 @@ async def test_auto_join_is_idempotent(client, db):
 
     # Manually add verification token back for second attempt
     from stoa.models import ApiKey
-    agent_result = await db.execute(
-        select(ApiKey).where(ApiKey.agent_email == "idem@example.com")
-    )
+
+    agent_result = await db.execute(select(ApiKey).where(ApiKey.agent_email == "idem@example.com"))
     agent = agent_result.scalar_one()
     agent.verification_token = verification_token
     await db.commit()
@@ -89,9 +87,7 @@ async def test_auto_join_is_idempotent(client, db):
     assert response2.status_code == 200
 
     # Check that there's only one membership
-    commons_result = await db.execute(
-        select(Group).where(Group.is_system)
-    )
+    commons_result = await db.execute(select(Group).where(Group.is_system))
     commons = commons_result.scalar_one()
 
     membership_result = await db.execute(
@@ -122,15 +118,14 @@ async def test_unverified_agent_not_in_commons(client, db):
 
     # Get the agent's ID
     from stoa.models import ApiKey
+
     agent_result = await db.execute(
         select(ApiKey).where(ApiKey.agent_email == "unverified@example.com")
     )
     agent = agent_result.scalar_one()
 
     # Get commons
-    commons_result = await db.execute(
-        select(Group).where(Group.is_system)
-    )
+    commons_result = await db.execute(select(Group).where(Group.is_system))
     commons = commons_result.scalar_one()
 
     # Check that the agent is NOT a member of The Stoa

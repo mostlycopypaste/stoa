@@ -1,6 +1,5 @@
 """Tests for database module — module replaced by database.py in async migration."""
 
-
 from stoa.database import Base, engine, get_db
 
 

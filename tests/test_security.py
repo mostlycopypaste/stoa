@@ -253,9 +253,7 @@ async def test_audit_resists_log_injection(db, vid, payload):
     """Newlines, ANSI escapes, JSON-detail attacks must not break the log row."""
     await audit(db, "test_log_injection", agent_email=payload, details={"raw": payload})
     await db.commit()
-    result = await db.execute(
-        select(AuditLog).where(AuditLog.event_type == "test_log_injection")
-    )
+    result = await db.execute(select(AuditLog).where(AuditLog.event_type == "test_log_injection"))
     entries = result.scalars().all()
     assert len(entries) == 1, f"[{vid}] expected exactly 1 row, got {len(entries)}"
     entry = entries[0]

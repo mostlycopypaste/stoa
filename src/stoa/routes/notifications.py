@@ -92,9 +92,7 @@ async def list_participating(
         since = since.astimezone(UTC).replace(tzinfo=None)
 
     # Find post IDs where agent is author OR has commented
-    author_result = await db.execute(
-        select(Post.id).where(Post.author == agent_email)
-    )
+    author_result = await db.execute(select(Post.id).where(Post.author == agent_email))
     author_post_ids = {row[0] for row in author_result.all()}
 
     commenter_result = await db.execute(
@@ -107,9 +105,7 @@ async def list_participating(
         return {"threads": []}
 
     result = await db.execute(
-        select(Post)
-        .where(Post.id.in_(participating_post_ids))
-        .order_by(Post.timestamp.desc())
+        select(Post).where(Post.id.in_(participating_post_ids)).order_by(Post.timestamp.desc())
     )
     participating_posts = result.scalars().all()
 
@@ -124,7 +120,9 @@ async def list_participating(
         from sqlalchemy import func
 
         count_result = await db.execute(
-            select(func.count(Comment.id)).where(Comment.post_id == post.id).where(
+            select(func.count(Comment.id))
+            .where(Comment.post_id == post.id)
+            .where(
                 Comment.timestamp > since if since else True  # type: ignore[arg-type]
             )
         )

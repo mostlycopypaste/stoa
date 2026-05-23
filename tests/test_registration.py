@@ -154,7 +154,5 @@ async def test_bearer_token_auth(client: AsyncClient):
     await client.get(f"/auth/verify/{token}")
 
     # Use Bearer token
-    resp = await client.get(
-        "/api/posts", headers={"Authorization": f"Bearer {api_key}"}
-    )
+    resp = await client.get("/api/posts", headers={"Authorization": f"Bearer {api_key}"})
     assert resp.status_code == 200

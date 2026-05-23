@@ -556,9 +556,7 @@ class TestUpdatePost:
         )
 
         async with TestSession() as db:
-            result = await db.execute(
-                select(AuditLog).where(AuditLog.event_type == "post_edited")
-            )
+            result = await db.execute(select(AuditLog).where(AuditLog.event_type == "post_edited"))
             audit_entries = result.scalars().all()
             assert len(audit_entries) >= 1
             entry = audit_entries[-1]
@@ -576,9 +574,7 @@ class TestUpdatePost:
         await client.delete(f"/api/posts/{post_id}", headers=ALICE_HEADERS)
 
         async with TestSession() as db:
-            result = await db.execute(
-                select(AuditLog).where(AuditLog.event_type == "post_deleted")
-            )
+            result = await db.execute(select(AuditLog).where(AuditLog.event_type == "post_deleted"))
             audit_entries = result.scalars().all()
             assert len(audit_entries) >= 1
             entry = audit_entries[-1]

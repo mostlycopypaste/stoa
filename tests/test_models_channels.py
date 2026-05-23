@@ -137,7 +137,9 @@ class TestChannelRelationships:
         await db.commit()
 
         # Query channels directly
-        result = await db.execute(select(Channel).filter_by(group_id=group.id).order_by(Channel.name))
+        result = await db.execute(
+            select(Channel).filter_by(group_id=group.id).order_by(Channel.name)
+        )
         channels = result.scalars().all()
 
         assert len(channels) == 3

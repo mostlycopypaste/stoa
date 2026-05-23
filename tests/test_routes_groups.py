@@ -160,9 +160,7 @@ async def test_request_join_discoverable(client: AsyncClient):
     assert resp.json()["status"] == "pending"
 
     # Alice (owner) approves
-    resp = await client.post(
-        f"/api/groups/{group_id}/approve/{request_id}", headers=ALICE_HEADERS
-    )
+    resp = await client.post(f"/api/groups/{group_id}/approve/{request_id}", headers=ALICE_HEADERS)
     assert resp.status_code == 201
     assert resp.json()["agent_email"] == "bob@herd.ai"
     assert resp.json()["role"] == "member"
@@ -227,9 +225,7 @@ async def test_non_owner_approve_403(client: AsyncClient):
     request_id = resp.json()["id"]
 
     # Bob tries to approve his own request
-    resp = await client.post(
-        f"/api/groups/{group_id}/approve/{request_id}", headers=BOB_HEADERS
-    )
+    resp = await client.post(f"/api/groups/{group_id}/approve/{request_id}", headers=BOB_HEADERS)
     assert resp.status_code == 403
 
 

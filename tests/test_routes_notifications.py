@@ -87,7 +87,9 @@ class TestParticipatingEndpoint:
         """callback_flag=True when someone replies to agent's comment via in_reply_to."""
         post = await _create_post(client, subject="Bob's Post", author="bob")
         alice_comment = await _add_comment(client, post_id=post["id"], author="alice")
-        await _add_comment(client, post_id=post["id"], author="bob", in_reply_to=alice_comment["id"])
+        await _add_comment(
+            client, post_id=post["id"], author="bob", in_reply_to=alice_comment["id"]
+        )
         resp = await client.get("/api/posts/participating", headers=ALICE_HEADERS)
         assert resp.status_code == 200
         data = resp.json()
@@ -209,7 +211,9 @@ class TestCommentInReplyTo:
         """Comments can reference another comment via in_reply_to."""
         post = await _create_post(client, subject="Thread", author="alice")
         parent = await _add_comment(client, post_id=post["id"], author="bob")
-        reply = await _add_comment(client, post_id=post["id"], author="alice", in_reply_to=parent["id"])
+        reply = await _add_comment(
+            client, post_id=post["id"], author="alice", in_reply_to=parent["id"]
+        )
         assert reply["in_reply_to"] == parent["id"]
 
     async def test_create_comment_without_in_reply_to(self, client: AsyncClient) -> None:
@@ -267,14 +271,18 @@ class TestCallbackFlagClearedByRead:
         assert len(data["threads"]) == 1
         assert data["threads"][0]["callback_flag"] is False
 
-    async def test_callback_flag_cleared_after_read_on_replied_thread(self, client: AsyncClient) -> None:
+    async def test_callback_flag_cleared_after_read_on_replied_thread(
+        self, client: AsyncClient
+    ) -> None:
         """callback_flag=False when agent reads a thread they replied to, after a reply."""
         # Bob creates a post
         post = await _create_post(client, subject="Bob's Post", author="bob")
         # Alice comments on it
         alice_comment = await _add_comment(client, post_id=post["id"], author="alice")
         # Bob replies to Alice — callback_flag should be True for Alice
-        await _add_comment(client, post_id=post["id"], author="bob", in_reply_to=alice_comment["id"])
+        await _add_comment(
+            client, post_id=post["id"], author="bob", in_reply_to=alice_comment["id"]
+        )
         resp = await client.get("/api/posts/participating", headers=ALICE_HEADERS)
         assert resp.status_code == 200
         data = resp.json()
@@ -292,7 +300,9 @@ class TestCallbackFlagClearedByRead:
         assert len(data["threads"]) == 1
         assert data["threads"][0]["callback_flag"] is False
 
-    async def test_callback_flag_returns_after_new_reply_after_read(self, client: AsyncClient) -> None:
+    async def test_callback_flag_returns_after_new_reply_after_read(
+        self, client: AsyncClient
+    ) -> None:
         """callback_flag becomes True again when a new reply arrives after the agent read."""
         # Alice creates a post
         post = await _create_post(client, subject="Alice's Post", author="alice")
@@ -326,7 +336,9 @@ class TestCallbackFlagClearedByRead:
         data = resp.json()
         assert data["threads"][0]["callback_flag"] is True
 
-    async def test_callback_flag_cleared_on_reread_after_new_reply(self, client: AsyncClient) -> None:
+    async def test_callback_flag_cleared_on_reread_after_new_reply(
+        self, client: AsyncClient
+    ) -> None:
         """Re-reading a post after a new reply clears callback_flag again."""
         # Alice creates a post
         post = await _create_post(client, subject="Alice's Post", author="alice")

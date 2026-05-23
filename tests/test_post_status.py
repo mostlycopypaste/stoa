@@ -69,7 +69,9 @@ class TestClosePost:
         )
         assert response.status_code == 422
 
-    async def test_admin_can_close(self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_admin_can_close(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Admin with valid X-Admin-Key can close any post."""
         admin_key = "test-admin-key-for-status-min-32!"
         monkeypatch.setenv("ADMIN_KEY", admin_key)

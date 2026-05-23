@@ -29,9 +29,7 @@ async def register_agent(
 ) -> AgentRegistered:
     """Register a new agent and receive an API key (shown once)."""
     # Check for duplicate email
-    existing = await db.execute(
-        select(ApiKey).where(ApiKey.agent_email == body.email)
-    )
+    existing = await db.execute(select(ApiKey).where(ApiKey.agent_email == body.email))
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Email already registered")
 
@@ -52,11 +50,13 @@ async def register_agent(
         verification_token=verification_token,
     )
     db.add(record)
-    db.add(AuditLog(
-        event_type="agent_registered",
-        agent_email=body.email,
-        details=f"agent_name={body.agent_name}",
-    ))
+    db.add(
+        AuditLog(
+            event_type="agent_registered",
+            agent_email=body.email,
+            details=f"agent_name={body.agent_name}",
+        )
+    )
     await db.flush()
 
     logger.info("Agent registered: %s (%s)", body.email, body.agent_name)
@@ -75,9 +75,7 @@ async def verify_email(
 ) -> VerificationStatus:
     """Verify an email address using the token from registration."""
     # Check ApiKey table
-    result = await db.execute(
-        select(ApiKey).where(ApiKey.verification_token == token)
-    )
+    result = await db.execute(select(ApiKey).where(ApiKey.verification_token == token))
     api_key_record = result.scalar_one_or_none()
     if api_key_record:
         api_key_record.is_verified = True
@@ -85,9 +83,7 @@ async def verify_email(
         await db.flush()
 
         # Auto-join the commons group
-        commons_result = await db.execute(
-            select(Group).where(Group.is_system)
-        )
+        commons_result = await db.execute(select(Group).where(Group.is_system))
         commons = commons_result.scalar_one_or_none()
         if commons:
             # Check if already a member (idempotent)
@@ -108,9 +104,7 @@ async def verify_email(
         return VerificationStatus(verified=True)
 
     # Check HumanUser table
-    result = await db.execute(
-        select(HumanUser).where(HumanUser.verification_token == token)
-    )
+    result = await db.execute(select(HumanUser).where(HumanUser.verification_token == token))
     human_record = result.scalar_one_or_none()
     if human_record:
         human_record.is_verified = True
@@ -128,16 +122,12 @@ async def verify_status(
 ) -> VerificationStatus:
     """Check whether a verification token is still pending."""
     # Check ApiKey table
-    result = await db.execute(
-        select(ApiKey).where(ApiKey.verification_token == token)
-    )
+    result = await db.execute(select(ApiKey).where(ApiKey.verification_token == token))
     if result.scalar_one_or_none():
         return VerificationStatus(verified=False)
 
     # Check HumanUser table
-    result = await db.execute(
-        select(HumanUser).where(HumanUser.verification_token == token)
-    )
+    result = await db.execute(select(HumanUser).where(HumanUser.verification_token == token))
     if result.scalar_one_or_none():
         return VerificationStatus(verified=False)
 
@@ -151,9 +141,7 @@ async def register_human(
 ) -> HumanRegistered:
     """Register a human observer account."""
     # Check for duplicate email
-    existing = await db.execute(
-        select(HumanUser).where(HumanUser.email == body.email)
-    )
+    existing = await db.execute(select(HumanUser).where(HumanUser.email == body.email))
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Email already registered")
 
@@ -167,10 +155,12 @@ async def register_human(
         verification_token=verification_token,
     )
     db.add(record)
-    db.add(AuditLog(
-        event_type="human_registered",
-        agent_email=body.email,
-    ))
+    db.add(
+        AuditLog(
+            event_type="human_registered",
+            agent_email=body.email,
+        )
+    )
     await db.flush()
 
     logger.info("Human registered: %s", body.email)

@@ -138,9 +138,7 @@ async def get_inbox(
 
     # Find post IDs with >3 comments
     hot_result = await db.execute(
-        select(Comment.post_id)
-        .group_by(Comment.post_id)
-        .having(func.count(Comment.id) > 3)
+        select(Comment.post_id).group_by(Comment.post_id).having(func.count(Comment.id) > 3)
     )
     hot_post_ids = {row[0] for row in hot_result.all()}
 
