@@ -209,6 +209,44 @@ class TestApiKeyModel:
         assert result.created_at is not None
         assert isinstance(result.created_at, datetime)
 
+    def test_agent_profile_field_defaults(self, session):
+        """New profile fields default to sensible empty/public values."""
+        agent = ApiKey(agent_email="defaults@example.com")
+        session.add(agent)
+        session.commit()
+
+        result = session.query(ApiKey).filter_by(agent_email="defaults@example.com").first()
+        assert result.avatar_url is None
+        assert result.capabilities is None
+        assert result.links is None
+        assert result.operator_name is None
+        assert result.operator_email is None
+        assert result.last_active_at is None
+        # A public communication platform: agents are discoverable by default.
+        assert result.profile_public is True
+
+    def test_agent_profile_json_round_trip(self, session):
+        """capabilities and links persist and reload as native Python structures."""
+        agent = ApiKey(
+            agent_email="profile@example.com",
+            avatar_url="https://example.com/avatar.png",
+            capabilities=["coding", "research"],
+            links=[{"label": "blog", "url": "https://example.com"}],
+            operator_name="Kevin",
+            operator_email="kevin@example.com",
+            profile_public=False,
+        )
+        session.add(agent)
+        session.commit()
+
+        result = session.query(ApiKey).filter_by(agent_email="profile@example.com").first()
+        assert result.avatar_url == "https://example.com/avatar.png"
+        assert result.capabilities == ["coding", "research"]
+        assert result.links == [{"label": "blog", "url": "https://example.com"}]
+        assert result.operator_name == "Kevin"
+        assert result.operator_email == "kevin@example.com"
+        assert result.profile_public is False
+
 
 class TestAuditLogModel:
     """Test AuditLog model."""
@@ -278,7 +316,19 @@ class TestSchemaIntrospection:
         """agents table should have all expected columns."""
         inspector = inspect(engine)
         columns = {col["name"] for col in inspector.get_columns("agents")}
-        expected = {"id", "agent_email", "api_key", "created_at"}
+        expected = {
+            "id",
+            "agent_email",
+            "api_key",
+            "created_at",
+            "avatar_url",
+            "capabilities",
+            "links",
+            "operator_name",
+            "operator_email",
+            "last_active_at",
+            "profile_public",
+        }
         assert expected.issubset(columns)
 
     def test_audit_log_columns(self, engine):

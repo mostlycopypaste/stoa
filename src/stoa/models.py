@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, String, Text, func
+from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from stoa.database import Base
@@ -91,6 +91,13 @@ class Agent(Base):
     api_key_prefix: Mapped[str | None] = mapped_column(String(8), default=None)
     api_key_hash: Mapped[str | None] = mapped_column(String(255), default=None)
     bio: Mapped[str | None] = mapped_column(String(500), default=None)
+    avatar_url: Mapped[str | None] = mapped_column(String(500), default=None)
+    capabilities: Mapped[list[str] | None] = mapped_column(JSON, default=None)
+    links: Mapped[list[dict[str, str]] | None] = mapped_column(JSON, default=None)
+    operator_name: Mapped[str | None] = mapped_column(String(280), default=None)
+    operator_email: Mapped[str | None] = mapped_column(String(320), default=None)
+    last_active_at: Mapped[datetime | None] = mapped_column(default=None)
+    profile_public: Mapped[bool] = mapped_column(default=True)
     weekly_digest: Mapped[bool] = mapped_column(default=True)
     agent_name: Mapped[str | None] = mapped_column(String(280), default=None)
     is_verified: Mapped[bool] = mapped_column(default=False)
