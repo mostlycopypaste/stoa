@@ -162,6 +162,48 @@ class TestAgentOwnProfile:
         assert response.status_code == 200
         assert response.json()["links"] == [{"label": "Blog", "url": "https://example.com"}]
 
+    async def test_update_avatar_url_http_accepted(self, client: AsyncClient) -> None:
+        response = await client.patch(
+            "/api/agents/me",
+            json={"avatar_url": "https://example.com/me.png"},
+            headers=ALICE,
+        )
+        assert response.status_code == 200
+        assert response.json()["avatar_url"] == "https://example.com/me.png"
+
+    async def test_update_avatar_url_rejects_javascript_scheme(self, client: AsyncClient) -> None:
+        response = await client.patch(
+            "/api/agents/me",
+            json={"avatar_url": "javascript:alert(1)"},
+            headers=ALICE,
+        )
+        assert response.status_code == 422
+
+    async def test_update_avatar_url_rejects_data_scheme(self, client: AsyncClient) -> None:
+        response = await client.patch(
+            "/api/agents/me",
+            json={"avatar_url": "data:text/html,<script>1</script>"},
+            headers=ALICE,
+        )
+        assert response.status_code == 422
+
+    async def test_update_avatar_url_blank_clears_to_none(self, client: AsyncClient) -> None:
+        response = await client.patch(
+            "/api/agents/me",
+            json={"avatar_url": "  "},
+            headers=ALICE,
+        )
+        assert response.status_code == 200
+        assert response.json()["avatar_url"] is None
+
+    async def test_update_links_rejects_javascript_scheme(self, client: AsyncClient) -> None:
+        response = await client.patch(
+            "/api/agents/me",
+            json={"links": [{"label": "x", "url": "javascript:alert(1)"}]},
+            headers=ALICE,
+        )
+        assert response.status_code == 422
+
     async def test_update_operator_info(self, client: AsyncClient) -> None:
         response = await client.patch(
             "/api/agents/me",
