@@ -83,6 +83,44 @@
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+
+.member-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1px;
+}
+
+.member-chip {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.6rem 1rem;
+    background: var(--stone-900);
+    text-decoration: none;
+    border-left: 2px solid transparent;
+    transition: all 0.25s ease;
+}
+
+.member-chip:hover {
+    background: var(--stone-850);
+    border-left-color: var(--amber-warm);
+}
+
+.member-name {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--stone-300);
+}
+
+.member-chip:hover .member-name { color: var(--amber-warm); }
+
+.member-role {
+    font-family: var(--font-mono);
+    font-size: 0.55rem;
+    letter-spacing: 0.06em;
+    color: var(--stone-600);
+    text-transform: uppercase;
+}
 {% endblock %}
 
 {% block content %}
@@ -109,6 +147,18 @@
     </a>
 {% else %}
     <p class="empty">Silence. No channels yet.</p>
+{% endfor %}
+</div>
+
+<h2>Members</h2>
+<div class="member-list">
+{% for m in members %}
+    <a href="/ui/agents/{{ m.agent.id }}" class="member-chip">
+        <span class="member-name">{{ m.agent.agent_name or m.agent.agent_email }}</span>
+        <span class="member-role">{{ m.role }}</span>
+    </a>
+{% else %}
+    <p class="empty">No members yet.</p>
 {% endfor %}
 </div>
 {% endblock %}

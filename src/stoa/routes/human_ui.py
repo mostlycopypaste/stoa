@@ -7,7 +7,7 @@ import bcrypt
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.status import HTTP_303_SEE_OTHER
 
@@ -142,8 +142,102 @@ async def group_detail_ui(
     )
     channels = channels_result.scalars().all()
 
+    # Group members (linked to their public profiles)
+    members_result = await db.execute(
+        select(Agent, Membership.role)
+        .join(Membership, Membership.agent_id == Agent.id)
+        .where(Membership.group_id == group_id)
+        .order_by(Membership.joined_at)
+    )
+    members = [{"agent": agent, "role": role} for agent, role in members_result.all()]
+
     return templates.TemplateResponse(
-        request, "human/group_detail.html", {"group": group, "channels": channels, "user": user}
+        request,
+        "human/group_detail.html",
+        {"group": group, "channels": channels, "members": members, "user": user},
+    )
+
+
+@router.get("/agents", response_class=HTMLResponse, response_model=None)
+async def list_agents_ui(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> HTMLResponse | RedirectResponse:
+    """Public agent directory grid."""
+    user = await _get_current_human(request, db)
+    if user is None:
+        return RedirectResponse(url="/ui/login", status_code=HTTP_303_SEE_OTHER)
+
+    result = await db.execute(
+        select(Agent).where(Agent.profile_public.is_(True)).order_by(Agent.created_at.desc())
+    )
+    agents = result.scalars().all()
+
+    post_count_result = await db.execute(
+        select(Post.author, func.count(Post.id)).group_by(Post.author)
+    )
+    post_counts: dict[str, int] = {row[0]: row[1] for row in post_count_result.all()}
+
+    return templates.TemplateResponse(
+        request,
+        "human/agents.html",
+        {"agents": agents, "post_counts": post_counts, "user": user},
+    )
+
+
+@router.get("/agents/{agent_id:int}", response_class=HTMLResponse, response_model=None)
+async def agent_profile_ui(
+    agent_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> HTMLResponse | RedirectResponse:
+    """Full public profile page for a single agent."""
+    user = await _get_current_human(request, db)
+    if user is None:
+        return RedirectResponse(url="/ui/login", status_code=HTTP_303_SEE_OTHER)
+
+    result = await db.execute(select(Agent).where(Agent.id == agent_id))
+    agent = result.scalar_one_or_none()
+    if agent is None or not agent.profile_public:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Group memberships — only expose non-private groups to avoid leaking
+    # private-group membership.
+    groups_result = await db.execute(
+        select(Group)
+        .join(Membership, Membership.group_id == Group.id)
+        .where(
+            Membership.agent_id == agent_id,
+            Group.visibility.in_([GroupVisibility.PUBLIC, GroupVisibility.DISCOVERABLE]),
+        )
+        .order_by(Group.name)
+    )
+    groups = groups_result.scalars().all()
+
+    # Recent activity
+    posts_result = await db.execute(
+        select(Post)
+        .where(Post.author == agent.agent_email)
+        .order_by(Post.timestamp.desc())
+        .limit(10)
+    )
+    recent_posts = posts_result.scalars().all()
+
+    count_result = await db.execute(
+        select(func.count(Post.id)).where(Post.author == agent.agent_email)
+    )
+    post_count = count_result.scalar_one()
+
+    return templates.TemplateResponse(
+        request,
+        "human/agent_profile.html",
+        {
+            "agent": agent,
+            "groups": groups,
+            "recent_posts": recent_posts,
+            "post_count": post_count,
+            "user": user,
+        },
     )
 
 
