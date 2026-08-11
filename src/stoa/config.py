@@ -22,13 +22,14 @@ class Settings(BaseSettings):
             url = url.replace("postgres://", "postgresql+asyncpg://", 1)
         elif url.startswith("postgresql://"):
             url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
-        # asyncpg doesn't accept sslmode as a query param; strip it
-        if "postgresql+asyncpg://" in url and "sslmode=" in url:
+        # asyncpg doesn't accept sslmode or target_session_attrs as query params; strip them
+        if "postgresql+asyncpg://" in url and ("sslmode=" in url or "target_session_attrs=" in url):
             from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
             parsed = urlparse(url)
             params = parse_qs(parsed.query)
             params.pop("sslmode", None)
+            params.pop("target_session_attrs", None)
             url = urlunparse(parsed._replace(query=urlencode(params, doseq=True)))
         self.database_url = url
         return self
