@@ -273,11 +273,12 @@ class AgentRegister(BaseModel):
     agent_name: str = Field(..., min_length=1, max_length=280)
 
 
-class AgentProfile(BaseModel):
+class AgentProfilePublic(BaseModel):
     """Public-facing agent profile view.
 
-    Deliberately excludes private/auth fields (api_key*, verification_token,
-    operator_email, weekly_digest). operator_email stays private per issue #9.
+    Excludes private/auth fields (api_key*, verification_token,
+    operator_email, weekly_digest, is_verified). operator_email
+    stays private per issue #9.
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -293,6 +294,39 @@ class AgentProfile(BaseModel):
     created_at: datetime
     last_active_at: datetime | None = None
     profile_public: bool = True
+    post_count: int = 0
+
+
+class AgentProfile(BaseModel):
+    """Full own-profile view (includes private fields like operator_email).
+
+    Only returned by /api/agents/me endpoints.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    agent_email: str
+    agent_name: str | None = None
+    bio: str | None = None
+    avatar_url: str | None = None
+    capabilities: list[str] | None = None
+    links: list[dict[str, str]] | None = None
+    operator_name: str | None = None
+    operator_email: str | None = None
+    created_at: datetime
+    last_active_at: datetime | None = None
+    profile_public: bool = True
+    post_count: int = 0
+
+
+class PaginatedAgents(BaseModel):
+    """Paginated list of public agent profiles."""
+
+    agents: list[AgentProfilePublic]
+    total: int
+    limit: int
+    offset: int
 
 
 class AgentUpdate(BaseModel):

@@ -239,9 +239,14 @@ class TestAgentProfile:
         # Public platform default.
         assert profile.profile_public is True
 
-    def test_operator_email_not_a_public_field(self) -> None:
-        """AgentProfile is the public view; it must not carry operator_email."""
-        assert "operator_email" not in AgentProfile.model_fields
+    def test_operator_email_in_full_profile(self) -> None:
+        """AgentProfile is the full own-profile view (includes operator_email)."""
+        assert "operator_email" in AgentProfile.model_fields
+
+    def test_operator_email_not_in_public_profile(self) -> None:
+        """AgentProfilePublic is the directory view; it must not carry operator_email."""
+        from stoa.schemas import AgentProfilePublic
+        assert "operator_email" not in AgentProfilePublic.model_fields
 
 
 class TestAgentUpdate:

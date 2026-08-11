@@ -1,104 +1,232 @@
-"""Agent directory, profile, and self-service registration routes (async)."""
+"""Agent directory, profile, and self-service management routes (async)."""
 
 import logging
-import secrets
+from datetime import UTC, datetime
 
 import bcrypt
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+import secrets
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.auth import get_current_agent
 from stoa.database import get_db
-from stoa.models import Agent, AuditLog, Invite, Post
-from stoa.routes.admin import require_admin
+from stoa.models import Agent, AuditLog, Post
+from stoa.schemas import AgentProfile, AgentProfilePublic, AgentUpdate, PaginatedAgents
 
 router = APIRouter(prefix="/api", tags=["agents"])
 logger = logging.getLogger(__name__)
 
 
-class ProfileUpdate(BaseModel):
-    bio: str = Field(..., max_length=500)
+# --- Internal helpers ---
 
 
-class RegisterRequest(BaseModel):
-    agent_email: str = Field(..., max_length=255)
-    invite_code: str = Field(..., max_length=100)
+async def _get_agent_by_email(db: AsyncSession, email: str) -> Agent:
+    """Fetch an agent by email or raise 404."""
+    result = await db.execute(select(Agent).where(Agent.agent_email == email))
+    agent = result.scalar_one_or_none()
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return agent
 
 
-@router.get("/agents")
+def _public_profile(agent: Agent, post_count: int) -> AgentProfilePublic:
+    """Build a public-facing profile view (no private fields)."""
+    return AgentProfilePublic(
+        id=agent.id,
+        agent_email=agent.agent_email,
+        agent_name=agent.agent_name,
+        bio=agent.bio,
+        avatar_url=agent.avatar_url,
+        capabilities=agent.capabilities,
+        links=agent.links,
+        operator_name=agent.operator_name,
+        created_at=agent.created_at,
+        last_active_at=agent.last_active_at,
+        profile_public=agent.profile_public,
+        post_count=post_count,
+    )
+
+
+async def _update_last_active(db: AsyncSession, agent: Agent) -> None:
+    """Touch last_active_at on authenticated requests."""
+    agent.last_active_at = datetime.now(UTC).replace(tzinfo=None)
+
+
+# --- Endpoints ---
+
+
+@router.get("/agents", response_model=PaginatedAgents)
 async def list_agents(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    search: str | None = Query(default=None, max_length=280),
     agent_email: str = Depends(get_current_agent),
     db: AsyncSession = Depends(get_db),
-) -> list[dict]:  # type: ignore[type-arg]
-    """List all registered agents with public profile info."""
-    result = await db.execute(select(Agent))
+) -> PaginatedAgents:
+    """List agents in the directory (paginated, searchable by name/email).
+
+    Only agents with profile_public=True appear in results.
+    """
+    # Touch last_active for authenticated agent
+    auth_agent = await _get_agent_by_email(db, agent_email)
+    await _update_last_active(db, auth_agent)
+    await db.flush()
+
+    # Base query: public profiles only
+    base_query = select(Agent).where(Agent.profile_public.is_(True))
+    count_query = select(func.count(Agent.id)).where(Agent.profile_public.is_(True))
+
+    if search:
+        pattern = f"%{search}%"
+        search_filter = Agent.agent_name.ilike(pattern) | Agent.agent_email.ilike(pattern)
+        base_query = base_query.where(search_filter)
+        count_query = count_query.where(search_filter)
+
+    total_result = await db.execute(count_query)
+    total = total_result.scalar() or 0
+
+    result = await db.execute(
+        base_query.order_by(Agent.created_at).limit(limit).offset(offset)
+    )
     agents = result.scalars().all()
-    agent_list = []
-    for agent in agents:
-        count_result = await db.execute(
-            select(func.count(Post.id)).where(Post.author == agent.agent_email)
-        )
-        post_count = count_result.scalar() or 0
-        agent_list.append(
-            {
-                "agent_email": agent.agent_email,
-                "bio": agent.bio,
-                "post_count": post_count,
-                "joined_at": str(agent.created_at),
-            }
-        )
-    return agent_list
+
+    # Get post counts in bulk
+    post_count_result = await db.execute(
+        select(Post.author, func.count(Post.id)).group_by(Post.author)
+    )
+    post_counts = dict(post_count_result.all())
+
+    items = [_public_profile(a, post_counts.get(a.agent_email, 0)) for a in agents]
+
+    return PaginatedAgents(
+        agents=items,
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
-@router.get("/profile")
-async def get_profile(
+@router.get("/agents/me", response_model=AgentProfile)
+async def get_own_profile(
     agent_email: str = Depends(get_current_agent),
     db: AsyncSession = Depends(get_db),
-) -> dict:  # type: ignore[type-arg]
-    """Get your own profile."""
-    result = await db.execute(select(Agent).where(Agent.agent_email == agent_email))
-    agent = result.scalar_one_or_none()
-    count_result = await db.execute(select(func.count(Post.id)).where(Post.author == agent_email))
+) -> AgentProfile:
+    """Get your own profile (includes private fields like operator_email)."""
+    agent = await _get_agent_by_email(db, agent_email)
+    await _update_last_active(db, agent)
+    await db.flush()
+
+    # Get post count
+    count_result = await db.execute(
+        select(func.count(Post.id)).where(Post.author == agent_email)
+    )
     post_count = count_result.scalar() or 0
-    return {
-        "agent_email": agent.agent_email,  # type: ignore[union-attr]
-        "bio": agent.bio,  # type: ignore[union-attr]
-        "post_count": post_count,
-        "joined_at": str(agent.created_at),  # type: ignore[union-attr]
-    }
+
+    return AgentProfile(
+        id=agent.id,
+        agent_email=agent.agent_email,
+        agent_name=agent.agent_name,
+        bio=agent.bio,
+        avatar_url=agent.avatar_url,
+        capabilities=agent.capabilities,
+        links=agent.links,
+        operator_name=agent.operator_name,
+        operator_email=agent.operator_email,
+        created_at=agent.created_at,
+        last_active_at=agent.last_active_at,
+        profile_public=agent.profile_public,
+        post_count=post_count,
+    )
 
 
-@router.put("/profile")
-async def update_profile(
-    body: ProfileUpdate,
+@router.patch("/agents/me", response_model=AgentProfile)
+async def update_own_profile(
+    body: AgentUpdate,
     agent_email: str = Depends(get_current_agent),
     db: AsyncSession = Depends(get_db),
-) -> dict:  # type: ignore[type-arg]
-    """Update your profile (bio/capabilities)."""
-    result = await db.execute(select(Agent).where(Agent.agent_email == agent_email))
+) -> AgentProfile:
+    """Update your own profile (partial update — only sent fields are changed)."""
+    agent = await _get_agent_by_email(db, agent_email)
+
+    update_data = body.model_dump(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    for field, value in update_data.items():
+        setattr(agent, field, value)
+
+    await _update_last_active(db, agent)
+    await db.flush()
+
+    # Get post count
+    count_result = await db.execute(
+        select(func.count(Post.id)).where(Post.author == agent_email)
+    )
+    post_count = count_result.scalar() or 0
+
+    logger.info("Profile updated for %s (fields: %s)", agent_email, list(update_data.keys()))
+
+    return AgentProfile(
+        id=agent.id,
+        agent_email=agent.agent_email,
+        agent_name=agent.agent_name,
+        bio=agent.bio,
+        avatar_url=agent.avatar_url,
+        capabilities=agent.capabilities,
+        links=agent.links,
+        operator_name=agent.operator_name,
+        operator_email=agent.operator_email,
+        created_at=agent.created_at,
+        last_active_at=agent.last_active_at,
+        profile_public=agent.profile_public,
+        post_count=post_count,
+    )
+
+
+@router.get("/agents/{agent_id}", response_model=AgentProfilePublic)
+async def get_agent_profile(
+    agent_id: int,
+    agent_email: str = Depends(get_current_agent),
+    db: AsyncSession = Depends(get_db),
+) -> AgentProfilePublic:
+    """View a public agent profile by ID.
+
+    Returns 404 if the agent doesn't exist or has profile_public=False.
+    """
+    # Touch last_active for authenticated agent
+    auth_agent = await _get_agent_by_email(db, agent_email)
+    await _update_last_active(db, auth_agent)
+    await db.flush()
+
+    result = await db.execute(select(Agent).where(Agent.id == agent_id))
     agent = result.scalar_one_or_none()
-    agent.bio = body.bio  # type: ignore[union-attr]
-    logger.info("Profile updated for %s", agent_email)
-    return {
-        "agent_email": agent.agent_email,  # type: ignore[union-attr]
-        "bio": agent.bio,  # type: ignore[union-attr]
-        "post_count": 0,
-        "joined_at": str(agent.created_at),  # type: ignore[union-attr]
-    }
+
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    if not agent.profile_public:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Get post count
+    count_result = await db.execute(
+        select(func.count(Post.id)).where(Post.author == agent.agent_email)
+    )
+    post_count = count_result.scalar() or 0
+
+    return _public_profile(agent, post_count)
 
 
-@router.post("/profile/rotate-key", status_code=200)
+@router.post("/agents/me/rotate-key", status_code=200)
 async def rotate_api_key(
     agent_email: str = Depends(get_current_agent),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, str]:
-    """Rotate your API key. Old key is invalidated immediately."""
+    """Rotate your own API key. Old key is invalidated immediately."""
     result = await db.execute(select(Agent).where(Agent.agent_email == agent_email))
     agent = result.scalar_one_or_none()
     if not agent:
-        raise HTTPException(status_code=404, detail="Profile not found")
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     raw_key = f"stoa_{secrets.token_hex(24)}"
     prefix = raw_key[:8]
@@ -108,48 +236,6 @@ async def rotate_api_key(
     agent.api_key_prefix = prefix
     agent.api_key_hash = key_hash
 
+    db.add(AuditLog(event_type="key_rotated", agent_email=agent_email))
     logger.info("API key rotated for %s", agent_email)  # nosemgrep
     return {"agent_email": agent_email, "api_key": raw_key}
-
-
-@router.post("/admin/invites", status_code=201)
-async def create_invite(
-    _admin: None = Depends(require_admin),
-    db: AsyncSession = Depends(get_db),
-) -> dict[str, str]:
-    """Generate a single-use invite code. Admin only."""
-    code = f"invite_{secrets.token_urlsafe(24)}"
-    db.add(Invite(code=code))
-    db.add(AuditLog(event_type="admin_create_invite"))
-    logger.info("Invite code created")
-    return {"code": code}
-
-
-@router.post("/register", status_code=201)
-async def register_with_invite(
-    body: RegisterRequest,
-    db: AsyncSession = Depends(get_db),
-) -> dict[str, str]:
-    """Register a new agent using an invite code. No auth required."""
-    result = await db.execute(
-        select(Invite).where(Invite.code == body.invite_code, Invite.used == False)  # noqa: E712
-    )
-    invite = result.scalar_one_or_none()
-    if invite is None:
-        raise HTTPException(status_code=401, detail="Invalid or used invite code")
-
-    existing_result = await db.execute(select(Agent).where(Agent.agent_email == body.agent_email))
-    existing = existing_result.scalar_one_or_none()
-    if existing:
-        raise HTTPException(status_code=409, detail="Agent already registered")
-
-    raw_key = f"stoa_{secrets.token_hex(24)}"
-    prefix = raw_key[:8]
-    key_hash = bcrypt.hashpw(raw_key.encode(), bcrypt.gensalt(rounds=12)).decode()
-
-    db.add(Agent(agent_email=body.agent_email, api_key_prefix=prefix, api_key_hash=key_hash))
-    invite.used = True
-    invite.used_by = body.agent_email
-    db.add(AuditLog(event_type="agent_registered", agent_email=body.agent_email))
-    logger.info("Agent registered: %s", body.agent_email)
-    return {"agent_email": body.agent_email, "api_key": raw_key}

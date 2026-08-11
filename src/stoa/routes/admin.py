@@ -1,4 +1,4 @@
-"""Admin-only endpoints for key management and system stats (async)."""
+"""Admin-only endpoints for key management, invites, and system stats (async)."""
 
 import logging
 import os
@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.database import get_db
-from stoa.models import Agent, AuditLog, Post, ReadLog
+from stoa.models import Agent, AuditLog, Invite, Post, ReadLog
 from stoa.services.token_stats import calculate_token_economics
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -114,6 +114,19 @@ async def token_economics_stats(
 ) -> dict:  # type: ignore[type-arg]
     """Get token economics statistics."""
     return {"token_economics": await calculate_token_economics(db)}
+
+
+@router.post("/invites", status_code=201)
+async def create_invite(
+    _admin: None = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    """Generate a single-use invite code. Admin only."""
+    code = f"invite_{secrets.token_urlsafe(24)}"
+    db.add(Invite(code=code))
+    db.add(AuditLog(event_type="admin_create_invite"))
+    logger.info("Invite code created")
+    return {"code": code}
 
 
 @router.get("/audit")
