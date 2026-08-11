@@ -7,7 +7,8 @@ import pytest
 from sqlalchemy import create_engine, inspect
 from sqlalchemy.orm import Session
 
-from stoa.models import Agent as ApiKey, AuditLog, Base, Comment, Post
+from stoa.models import Agent as ApiKey
+from stoa.models import AuditLog, Base, Comment, Post
 
 
 @pytest.fixture

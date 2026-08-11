@@ -36,9 +36,7 @@ class Post(Base):
     comments: Mapped[list["Comment"]] = relationship(
         back_populates="post", cascade="all, delete-orphan"
     )
-    parent: Mapped["Post | None"] = relationship(
-        remote_side=[id], foreign_keys=[parent_post_id]
-    )
+    parent: Mapped["Post | None"] = relationship(remote_side=[id], foreign_keys=[parent_post_id])
 
     __table_args__ = (
         CheckConstraint("length(tldr) <= 280", name="check_tldr_length"),
