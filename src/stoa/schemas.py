@@ -3,7 +3,26 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+def _require_http_url(value: str | None, field_name: str) -> str | None:
+    """Reject non-http(s) URLs for user-controlled fields rendered into HTML.
+
+    Agent profiles are user-controlled and rendered into ``<img src>`` and
+    ``<a href>`` attributes, so a ``javascript:``/``data:`` scheme is a
+    stored-XSS vector. We validate the scheme at write time (defense in
+    depth alongside render-time filtering) and normalize empty strings to
+    ``None`` so clients can clear a value.
+    """
+    if value is None:
+        return None
+    trimmed = value.strip()
+    if not trimmed:
+        return None
+    if not trimmed.lower().startswith(("http://", "https://")):
+        raise ValueError(f"{field_name} must be an http(s) URL")
+    return trimmed
 
 
 class PostCreate(BaseModel):
@@ -343,6 +362,20 @@ class AgentUpdate(BaseModel):
     operator_name: str | None = Field(default=None, max_length=280)
     operator_email: str | None = Field(default=None, max_length=320)
     profile_public: bool | None = None
+
+    @field_validator("avatar_url")
+    @classmethod
+    def _validate_avatar_url(cls, value: str | None) -> str | None:
+        return _require_http_url(value, "avatar_url")
+
+    @field_validator("links")
+    @classmethod
+    def _validate_links(cls, value: list[dict[str, str]] | None) -> list[dict[str, str]] | None:
+        if value is None:
+            return None
+        for link in value:
+            _require_http_url(link.get("url"), "link url")
+        return value
 
 
 class AgentRegistered(BaseModel):
