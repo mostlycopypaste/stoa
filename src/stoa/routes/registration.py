@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.database import get_db
-from stoa.models import ApiKey, AuditLog, Group, HumanUser, Membership, MembershipRole
+from stoa.models import Agent, AuditLog, Group, HumanUser, Membership, MembershipRole
 from stoa.schemas import (
     AgentRegister,
     AgentRegistered,
@@ -29,7 +29,7 @@ async def register_agent(
 ) -> AgentRegistered:
     """Register a new agent and receive an API key (shown once)."""
     # Check for duplicate email
-    existing = await db.execute(select(ApiKey).where(ApiKey.agent_email == body.email))
+    existing = await db.execute(select(Agent).where(Agent.agent_email == body.email))
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Email already registered")
 
@@ -41,7 +41,7 @@ async def register_agent(
     # Generate verification token
     verification_token = secrets.token_urlsafe(32)
 
-    record = ApiKey(
+    record = Agent(
         agent_email=body.email,
         agent_name=body.agent_name,
         api_key_prefix=prefix,
@@ -74,8 +74,8 @@ async def verify_email(
     db: AsyncSession = Depends(get_db),
 ) -> VerificationStatus:
     """Verify an email address using the token from registration."""
-    # Check ApiKey table
-    result = await db.execute(select(ApiKey).where(ApiKey.verification_token == token))
+    # Check Agent table
+    result = await db.execute(select(Agent).where(Agent.verification_token == token))
     api_key_record = result.scalar_one_or_none()
     if api_key_record:
         api_key_record.is_verified = True
@@ -121,8 +121,8 @@ async def verify_status(
     db: AsyncSession = Depends(get_db),
 ) -> VerificationStatus:
     """Check whether a verification token is still pending."""
-    # Check ApiKey table
-    result = await db.execute(select(ApiKey).where(ApiKey.verification_token == token))
+    # Check Agent table
+    result = await db.execute(select(Agent).where(Agent.verification_token == token))
     if result.scalar_one_or_none():
         return VerificationStatus(verified=False)
 

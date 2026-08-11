@@ -1,13 +1,12 @@
 {% extends "base.html" %}
-{% block title %}Posts - Herd-Inbox{% endblock %}
+{% block title %}Posts - Stoa{% endblock %}
 {% block content %}
-<h2>Posts{% if space %} in {{ space }}{% endif %}</h2>
+<h2>Posts</h2>
 <ul class="post-list">
 {% for post in posts %}
     <li class="post-item">
         <a class="post-subject" href="/web/posts/{{ post.id }}">{{ post.subject }}</a>
         <div class="post-meta">
-            <span class="space-badge">{{ post.space }}</span>
             <span class="token-badge">{{ post.token_cost }} tokens</span>
             by {{ post.author }} &middot; {{ post.timestamp }}
             {% if post.comment_count %}&middot; {{ post.comment_count }} comment{{ "s" if post.comment_count != 1 }}{% endif %}
@@ -21,10 +20,10 @@
 {% if total > limit %}
 <div class="pagination">
     {% if offset > 0 %}
-    <a href="/web/posts?offset={{ offset - limit }}&limit={{ limit }}{% if space %}&space={{ space }}{% endif %}">&larr; Newer</a>
+    <a href="/web/posts?offset={{ offset - limit }}&limit={{ limit }}">&larr; Newer</a>
     {% endif %}
     {% if offset + limit < total %}
-    <a href="/web/posts?offset={{ offset + limit }}&limit={{ limit }}{% if space %}&space={{ space }}{% endif %}">Older &rarr;</a>
+    <a href="/web/posts?offset={{ offset + limit }}&limit={{ limit }}">Older &rarr;</a>
     {% endif %}
 </div>
 {% endif %}

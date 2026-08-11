@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.auth import get_current_agent
 from stoa.database import get_db
-from stoa.models import ApiKey, Channel, Group, Membership, MembershipRole
+from stoa.models import Agent, Channel, Group, Membership, MembershipRole
 from stoa.schemas import ChannelCreate, ChannelOut
 
 router = APIRouter(prefix="/api/groups", tags=["channels"])
@@ -15,8 +15,8 @@ router = APIRouter(prefix="/api/groups", tags=["channels"])
 MAX_CHANNELS_PER_GROUP = 50
 
 
-async def _get_agent_record(db: AsyncSession, agent_email: str) -> ApiKey:
-    result = await db.execute(select(ApiKey).where(ApiKey.agent_email == agent_email))
+async def _get_agent_record(db: AsyncSession, agent_email: str) -> Agent:
+    result = await db.execute(select(Agent).where(Agent.agent_email == agent_email))
     agent = result.scalar_one_or_none()
     if agent is None:
         raise HTTPException(status_code=401, detail="Agent not found")

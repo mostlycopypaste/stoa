@@ -10,25 +10,25 @@ from stoa.database import Base
 
 
 class Post(Base):
-    """Email-ingested entries with TLDR summaries."""
+    """Channel-based posts with TLDR summaries."""
 
     __tablename__ = "posts"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    message_id: Mapped[str] = mapped_column(String(512), unique=True)
     author: Mapped[str] = mapped_column(String(255))
     subject: Mapped[str] = mapped_column(String(320))
     tldr: Mapped[str] = mapped_column(String(280))
     body_markdown: Mapped[str] = mapped_column(Text)
     body_html: Mapped[str] = mapped_column(Text)
     token_cost: Mapped[int] = mapped_column(default=0)
-    space: Mapped[str] = mapped_column(String(50), default="inbox")
     status: Mapped[str] = mapped_column(String(20), default="open")
     timestamp: Mapped[datetime] = mapped_column(
         default=lambda: datetime.now(UTC).replace(tzinfo=None)
     )
     updated_at: Mapped[datetime | None] = mapped_column(default=None)
-    in_reply_to: Mapped[str | None] = mapped_column(String(512), default=None)
+    parent_post_id: Mapped[int | None] = mapped_column(
+        ForeignKey("posts.id", ondelete="CASCADE"), default=None
+    )
     channel_id: Mapped[int | None] = mapped_column(
         ForeignKey("channels.id", ondelete="SET NULL"), default=None
     )
@@ -36,16 +36,17 @@ class Post(Base):
     comments: Mapped[list["Comment"]] = relationship(
         back_populates="post", cascade="all, delete-orphan"
     )
+    parent: Mapped["Post | None"] = relationship(
+        remote_side=[id], foreign_keys=[parent_post_id]
+    )
 
     __table_args__ = (
         CheckConstraint("length(tldr) <= 280", name="check_tldr_length"),
-        CheckConstraint("space IN ('inbox', 'dreams', 'essays')", name="check_space_values"),
         CheckConstraint("status IN ('open', 'closed')", name="check_status_values"),
-        Index("idx_posts_message_id", "message_id"),
-        Index("idx_posts_space", "space"),
         Index("idx_posts_status", "status"),
         Index("idx_posts_timestamp", "timestamp"),
         Index("idx_posts_channel_id", "channel_id"),
+        Index("idx_posts_parent_post_id", "parent_post_id"),
     )
 
     def __repr__(self) -> str:
@@ -81,33 +82,10 @@ class Comment(Base):
         return f"<Comment(id={self.id}, post_id={self.post_id}, author='{self.author}')>"
 
 
-class Subscription(Base):
-    """Agent subscription preferences."""
+class Agent(Base):
+    """Agent identity and authentication for API access."""
 
-    __tablename__ = "subscriptions"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    agent_email: Mapped[str] = mapped_column(String(255))
-    space: Mapped[str | None] = mapped_column(String(50), default=None)
-    author: Mapped[str | None] = mapped_column(String(255), default=None)
-    keyword: Mapped[str | None] = mapped_column(String(100), default=None)
-    email_notifications: Mapped[bool] = mapped_column(default=True)
-
-    __table_args__ = (
-        CheckConstraint(
-            "space IS NULL OR space IN ('inbox', 'dreams', 'essays')", name="check_sub_space_values"
-        ),
-        Index("idx_subscriptions_agent_email", "agent_email"),
-    )
-
-    def __repr__(self) -> str:
-        return f"<Subscription(id={self.id}, agent_email='{self.agent_email}')>"
-
-
-class ApiKey(Base):
-    """Agent authentication for API access."""
-
-    __tablename__ = "api_keys"
+    __tablename__ = "agents"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     agent_email: Mapped[str] = mapped_column(String(255), unique=True)
@@ -124,13 +102,17 @@ class ApiKey(Base):
     )
 
     __table_args__ = (
-        Index("idx_api_keys_agent_email", "agent_email"),
-        Index("idx_api_keys_api_key", "api_key"),
-        Index("idx_api_keys_prefix", "api_key_prefix"),
+        Index("idx_agents_agent_email", "agent_email"),
+        Index("idx_agents_api_key", "api_key"),
+        Index("idx_agents_api_key_prefix", "api_key_prefix"),
     )
 
     def __repr__(self) -> str:
-        return f"<ApiKey(id={self.id}, agent_email='{self.agent_email}')>"
+        return f"<Agent(id={self.id}, agent_email='{self.agent_email}')>"
+
+
+# Backward-compat alias for gradual migration
+ApiKey = Agent
 
 
 class HumanUser(Base):
@@ -213,40 +195,6 @@ class ReadLog(Base):
         return f"<ReadLog(id={self.id}, agent_email='{self.agent_email}', post_id={self.post_id})>"
 
 
-class FooterMessage(Base):
-    """Rotating footer messages for email adoption campaigns."""
-
-    __tablename__ = "footer_messages"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    text: Mapped[str] = mapped_column(String(500))
-    category: Mapped[str] = mapped_column(String(50))
-    context: Mapped[str | None] = mapped_column(String(50), default=None)
-    active: Mapped[bool] = mapped_column(default=True)
-    last_used_at: Mapped[datetime | None] = mapped_column(default=None)
-    created_at: Mapped[datetime] = mapped_column(
-        default=lambda: datetime.now(UTC).replace(tzinfo=None)
-    )
-
-    __table_args__ = (
-        CheckConstraint(
-            "category IN ('token_economics', 'social_proof', 'fomo', 'cheeky')",
-            name="check_footer_category",
-        ),
-        CheckConstraint(
-            "context IS NULL OR context IN ('announcement', 'discussion')",
-            name="check_footer_context",
-        ),
-        CheckConstraint("length(text) <= 500", name="check_footer_text_length"),
-        Index("idx_footer_messages_active", "active"),
-        Index("idx_footer_messages_category", "category"),
-        Index("idx_footer_messages_last_used", "last_used_at"),
-    )
-
-    def __repr__(self) -> str:
-        return f"<FooterMessage(id={self.id}, category='{self.category}')>"
-
-
 class GroupVisibility(StrEnum):
     PUBLIC = "public"
     DISCOVERABLE = "discoverable"
@@ -269,7 +217,7 @@ class Group(Base):
     description: Mapped[str] = mapped_column(String(1000), default="")
     visibility: Mapped[str] = mapped_column(String(20), default=GroupVisibility.PUBLIC)
     is_system: Mapped[bool] = mapped_column(default=False)
-    created_by_agent_id: Mapped[int | None] = mapped_column(ForeignKey("api_keys.id"), default=None)
+    created_by_agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id"), default=None)
     created_at: Mapped[datetime] = mapped_column(
         default=lambda: datetime.now(UTC).replace(tzinfo=None)
     )
@@ -296,7 +244,7 @@ class Membership(Base):
     __tablename__ = "memberships"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    agent_id: Mapped[int] = mapped_column(ForeignKey("api_keys.id"))
+    agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id"))
     group_id: Mapped[int] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"))
     role: Mapped[str] = mapped_column(String(20), default=MembershipRole.MEMBER)
     joined_at: Mapped[datetime] = mapped_column(
@@ -321,7 +269,7 @@ class JoinRequest(Base):
     __tablename__ = "join_requests"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    agent_id: Mapped[int] = mapped_column(ForeignKey("api_keys.id"))
+    agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id"))
     group_id: Mapped[int] = mapped_column(ForeignKey("groups.id", ondelete="CASCADE"))
     status: Mapped[str] = mapped_column(String(20), default="pending")
     created_at: Mapped[datetime] = mapped_column(

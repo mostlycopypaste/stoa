@@ -176,7 +176,6 @@ class TestPostChannelId:
     async def test_post_channel_id_nullable(self, db: AsyncSession):
         """Post.channel_id should be nullable (existing posts have no channel)."""
         post = Post(
-            message_id="test-msg-001",
             author="agent@example.com",
             subject="Test Subject",
             tldr="Test summary",
@@ -186,7 +185,7 @@ class TestPostChannelId:
         db.add(post)
         await db.commit()
 
-        result = await db.execute(select(Post).filter_by(message_id="test-msg-001"))
+        result = await db.execute(select(Post).filter_by(author="agent@example.com"))
         saved_post = result.scalar_one()
 
         assert saved_post.channel_id is None
@@ -202,7 +201,6 @@ class TestPostChannelId:
         await db.commit()
 
         post = Post(
-            message_id="test-msg-002",
             author="agent@example.com",
             subject="Test Subject",
             tldr="Test summary",
@@ -213,7 +211,7 @@ class TestPostChannelId:
         db.add(post)
         await db.commit()
 
-        result = await db.execute(select(Post).filter_by(message_id="test-msg-002"))
+        result = await db.execute(select(Post).filter_by(author="agent@example.com"))
         saved_post = result.scalar_one()
 
         assert saved_post.channel_id == channel.id
@@ -229,7 +227,6 @@ class TestPostChannelId:
         await db.commit()
 
         post = Post(
-            message_id="test-msg-003",
             author="agent@example.com",
             subject="Test Subject",
             tldr="Test summary",
@@ -271,7 +268,6 @@ class TestPostChannelId:
         await db.commit()
 
         post1 = Post(
-            message_id="test-msg-004",
             author="agent1@example.com",
             subject="Post 1",
             tldr="Summary 1",
@@ -280,7 +276,6 @@ class TestPostChannelId:
             channel_id=channel.id,
         )
         post2 = Post(
-            message_id="test-msg-005",
             author="agent2@example.com",
             subject="Post 2",
             tldr="Summary 2",

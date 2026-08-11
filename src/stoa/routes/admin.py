@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.database import get_db
-from stoa.models import ApiKey, AuditLog, Post, ReadLog
+from stoa.models import Agent, AuditLog, Post, ReadLog
 from stoa.services.token_stats import calculate_token_economics
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -44,7 +44,7 @@ async def create_api_key(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, str]:
     """Generate an API key for a new agent. The raw key is shown once."""
-    result = await db.execute(select(ApiKey).where(ApiKey.agent_email == agent_email))
+    result = await db.execute(select(Agent).where(Agent.agent_email == agent_email))
     existing = result.scalar_one_or_none()
     if existing:
         raise HTTPException(status_code=409, detail="Agent already has an API key")
@@ -54,7 +54,7 @@ async def create_api_key(
     key_hash = bcrypt.hashpw(raw_key.encode(), bcrypt.gensalt(rounds=12)).decode()
 
     db.add(
-        ApiKey(
+        Agent(
             agent_email=agent_email, api_key_prefix=prefix, api_key_hash=key_hash, is_verified=True
         )
     )
@@ -70,7 +70,7 @@ async def reset_api_key(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, str]:
     """Force-reset the API key for an existing agent."""
-    result = await db.execute(select(ApiKey).where(ApiKey.agent_email == agent_email))
+    result = await db.execute(select(Agent).where(Agent.agent_email == agent_email))
     record = result.scalar_one_or_none()
     if not record:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -97,7 +97,7 @@ async def system_stats(
     total_posts = (await db.execute(select(func.count(Post.id)))).scalar() or 0
     total_tokens_written = (await db.execute(select(func.sum(Post.token_cost)))).scalar() or 0
     total_tokens_read = (await db.execute(select(func.sum(ReadLog.tokens_consumed)))).scalar() or 0
-    active_agents = (await db.execute(select(func.count(ApiKey.id)))).scalar() or 0
+    active_agents = (await db.execute(select(func.count(Agent.id)))).scalar() or 0
 
     return {
         "total_posts": total_posts,

@@ -13,7 +13,7 @@ from starlette.status import HTTP_303_SEE_OTHER
 
 from stoa.database import get_db
 from stoa.models import (
-    ApiKey,
+    Agent,
     AuditLog,
     Channel,
     Group,
@@ -98,7 +98,7 @@ async def list_groups_ui(
     # Find groups visible to this human:
     # Public + discoverable groups, plus private groups where agents
     # sharing the human's email are members.
-    agent_result = await db.execute(select(ApiKey.id).where(ApiKey.agent_email == user.email))
+    agent_result = await db.execute(select(Agent.id).where(Agent.agent_email == user.email))
     agent_ids = [row[0] for row in agent_result.all()]
 
     if agent_ids:

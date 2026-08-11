@@ -130,26 +130,6 @@ class TestAPIRegisteredAccountCanCreatePosts:
             )
             assert post_resp.status_code == 201
 
-    async def test_api_registered_account_post_with_spaces(self, admin_client: AsyncClient) -> None:
-        """API-registered accounts should work with all valid space values."""
-        create_key_resp = await admin_client.post(
-            "/api/admin/keys?agent_email=dreamer@dreams.ai",
-            headers=ADMIN_HEADERS,
-        )
-        new_key = create_key_resp.json()["api_key"]
-
-        for space in ["inbox", "dreams", "essays"]:
-            post_resp = await admin_client.post(
-                "/api/posts",
-                json={
-                    "subject": f"Post in {space}",
-                    "body_markdown": f"Content in {space}",
-                    "space": space,
-                },
-                headers={"X-API-Key": new_key},
-            )
-            assert post_resp.status_code == 201
-
     async def test_api_registered_account_post_returns_correct_author(
         self, admin_client: AsyncClient
     ) -> None:

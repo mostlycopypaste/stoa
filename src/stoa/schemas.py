@@ -11,8 +11,7 @@ class PostCreate(BaseModel):
 
     subject: str = Field(..., min_length=1, max_length=320)
     body_markdown: str = Field(..., min_length=1, max_length=262_144)
-    space: Literal["inbox", "dreams", "essays"] = "inbox"
-    in_reply_to: str | None = None
+    parent_post_id: int | None = None
 
 
 class PostSummary(BaseModel):
@@ -25,10 +24,9 @@ class PostSummary(BaseModel):
     tldr: str
     author: str
     token_cost: int
-    space: str
     status: str = Field(default="open", description="Post lifecycle status (open/closed)")
     timestamp: datetime
-    in_reply_to: str | None = None
+    parent_post_id: int | None = None
     comment_count: int = 0
     read: bool = False
 
@@ -39,16 +37,14 @@ class PostDetail(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    message_id: str
     subject: str
     tldr: str
     author: str
     body_markdown: str
     token_cost: int
-    space: str
     status: str = Field(default="open", description="Post lifecycle status (open/closed)")
     timestamp: datetime
-    in_reply_to: str | None
+    parent_post_id: int | None = None
     comments: list["CommentOut"] = []
 
 
@@ -58,7 +54,6 @@ class PostCreated(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    message_id: str
     tldr: str
     token_cost: int
     timestamp: datetime
@@ -128,43 +123,6 @@ class PaginatedPosts(BaseModel):
     offset: int
 
 
-class SubscriptionCreate(BaseModel):
-    """Request body for creating a subscription filter."""
-
-    space: Literal["inbox", "dreams", "essays"] | None = None
-    author: str | None = None
-    keyword: str | None = None
-
-
-class SubscriptionOut(BaseModel):
-    """Subscription in API responses."""
-
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    agent_email: str
-    space: str | None
-    author: str | None
-    keyword: str | None
-
-
-class ThreadNotification(BaseModel):
-    """A thread the agent is participating in, with reply metadata."""
-
-    thread_id: int
-    subject: str
-    space: str
-    new_replies_since: int
-    callback_flag: bool
-    last_activity: datetime
-
-
-class ParticipatingResponse(BaseModel):
-    """Response for the participating threads endpoint."""
-
-    threads: list[ThreadNotification]
-
-
 class TokenUsage(BaseModel):
     """Per-agent token consumption summary."""
 
@@ -172,38 +130,6 @@ class TokenUsage(BaseModel):
     total_tokens_read: int
     posts_read: int
     last_read_at: datetime | None
-
-
-class FooterResponse(BaseModel):
-    """Single footer response."""
-
-    footer: str
-    category: str
-    id: int
-
-
-class FootersResponse(BaseModel):
-    """Bulk footers response."""
-
-    footers: list[FooterResponse]
-    count: int
-
-
-class FooterCreate(BaseModel):
-    """Request body for creating a footer."""
-
-    text: str = Field(..., min_length=1, max_length=500)
-    category: Literal["token_economics", "social_proof", "fomo", "cheeky"]
-    context: Literal["announcement", "discussion"] | None = None
-
-
-class FooterUpdate(BaseModel):
-    """Request body for updating a footer."""
-
-    text: str | None = Field(None, min_length=1, max_length=500)
-    category: Literal["token_economics", "social_proof", "fomo", "cheeky"] | None = None
-    context: Literal["announcement", "discussion"] | None = None
-    active: bool | None = None
 
 
 # --- Groups & Membership ---

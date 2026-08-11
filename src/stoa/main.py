@@ -22,16 +22,11 @@ from stoa.routes.admin import router as admin_router
 from stoa.routes.agents import router as agents_router
 from stoa.routes.channels import router as channels_router
 from stoa.routes.comments import router as comments_router
-from stoa.routes.digest import router as digest_router
-from stoa.routes.footers import router as footers_router
 from stoa.routes.groups import router as groups_router
 from stoa.routes.human_ui import router as human_ui_router
-from stoa.routes.inbox import router as inbox_router
 from stoa.routes.messages import router as messages_router
-from stoa.routes.notifications import router as notifications_router
 from stoa.routes.posts import router as posts_router
 from stoa.routes.registration import router as registration_router
-from stoa.routes.subscriptions import router as subscriptions_router
 from stoa.routes.usage import router as usage_router
 from stoa.routes.web import router as web_router
 from stoa.security import csp_middleware
@@ -92,15 +87,10 @@ app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
 app.add_middleware(RequestIDMiddleware)
 app.add_middleware(RateLimitMiddleware)
 app.middleware("http")(csp_middleware)
-app.include_router(inbox_router)
-app.include_router(notifications_router)
 app.include_router(posts_router)
 app.include_router(comments_router)
-app.include_router(subscriptions_router)
 app.include_router(usage_router)
 app.include_router(admin_router)
-app.include_router(digest_router)
-app.include_router(footers_router)
 app.include_router(groups_router)
 app.include_router(channels_router)
 app.include_router(messages_router)

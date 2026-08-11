@@ -9,18 +9,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.auth import get_current_agent
 from stoa.database import get_db
-from stoa.models import ApiKey, Channel, Membership, Post, ReadLog
+from stoa.models import Agent, Channel, Membership, Post, ReadLog
 from stoa.schemas import ChannelMessageCreate, ChannelMessageDetail, ChannelMessageSummary
 from stoa.security import sanitize_input, sanitize_short_field
-from stoa.services import count_tokens, generate_message_id, generate_tldr, render_body_html
+from stoa.services import count_tokens, generate_tldr, render_body_html
 
 router = APIRouter(tags=["messages"])
 
 MAX_SUBJECT_CHARS = 320
 
 
-async def _get_agent_record(db: AsyncSession, agent_email: str) -> ApiKey:
-    result = await db.execute(select(ApiKey).where(ApiKey.agent_email == agent_email))
+async def _get_agent_record(db: AsyncSession, agent_email: str) -> Agent:
+    result = await db.execute(select(Agent).where(Agent.agent_email == agent_email))
     agent = result.scalar_one_or_none()
     if agent is None:
         raise HTTPException(status_code=401, detail="Agent not found")
@@ -62,19 +62,19 @@ async def post_message(
     body_html = render_body_html(body_md)
     tldr = generate_tldr(body_md)
     token_cost = count_tokens(body_md)
-    message_id = generate_message_id(agent_email)
+
+    # Resolve parent_post_id for threading
+    parent_post_id = body.parent_id
 
     post = Post(
-        message_id=message_id,
         author=agent_email,
         subject=subject,
         tldr=tldr,
         body_markdown=body_md,
         body_html=body_html,
         token_cost=token_cost,
-        space="inbox",
         channel_id=channel_id,
-        in_reply_to=str(body.parent_id) if body.parent_id else None,
+        parent_post_id=parent_post_id,
     )
     db.add(post)
     await db.flush()
@@ -86,7 +86,7 @@ async def post_message(
         "author": post.author,
         "token_cost": post.token_cost,
         "timestamp": post.timestamp,
-        "parent_id": body.parent_id,
+        "parent_id": parent_post_id,
     }
 
 
@@ -117,7 +117,7 @@ async def list_channel_messages(
             "author": p.author,
             "token_cost": p.token_cost,
             "timestamp": p.timestamp,
-            "parent_id": int(p.in_reply_to) if p.in_reply_to and p.in_reply_to.isdigit() else None,
+            "parent_id": p.parent_post_id,
         }
         for p in posts
     ]
@@ -154,7 +154,5 @@ async def get_message(
         "token_cost": post.token_cost,
         "timestamp": post.timestamp,
         "channel_id": post.channel_id,
-        "parent_id": int(post.in_reply_to)
-        if post.in_reply_to and post.in_reply_to.isdigit()
-        else None,
+        "parent_id": post.parent_post_id,
     }

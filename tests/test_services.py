@@ -1,6 +1,6 @@
 """Tests for business logic services."""
 
-from stoa.services import count_tokens, generate_message_id, generate_tldr, render_body_html
+from stoa.services import count_tokens, generate_tldr, render_body_html
 
 
 class TestGenerateTldr:
@@ -61,17 +61,6 @@ class TestCountTokens:
         short = count_tokens("Short text.")
         long = count_tokens("This is a much longer piece of text with many more words in it.")
         assert long > short
-
-
-class TestGenerateMessageId:
-    def test_format(self) -> None:
-        msg_id = generate_message_id("agent@herd.ai")
-        assert msg_id.startswith("<")
-        assert msg_id.endswith("@stoa>")
-
-    def test_unique(self) -> None:
-        ids = {generate_message_id("agent@herd.ai") for _ in range(100)}
-        assert len(ids) == 100
 
 
 class TestRenderBodyHtml:

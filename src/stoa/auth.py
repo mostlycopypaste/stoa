@@ -8,14 +8,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.database import get_db
-from stoa.models import ApiKey
+from stoa.models import Agent
 
 logger = logging.getLogger(__name__)
 
 DUMMY_HASH = bcrypt.hashpw(b"dummy-key-for-timing-safety", bcrypt.gensalt(rounds=12))
 
 
-def _verify_key(api_key: str, key_record: ApiKey | None) -> bool:
+def _verify_key(api_key: str, key_record: Agent | None) -> bool:
     """Verify an API key against a record in constant time.
 
     If key_record is None, runs bcrypt against a dummy hash to prevent
@@ -60,7 +60,7 @@ async def get_current_agent(
 
     # Try hashed lookup first (prefix-based)
     prefix = api_key[:8] if len(api_key) >= 8 else api_key
-    result = await db.execute(select(ApiKey).where(ApiKey.api_key_prefix == prefix))
+    result = await db.execute(select(Agent).where(Agent.api_key_prefix == prefix))
     candidates = result.scalars().all()
 
     for candidate in candidates:
@@ -71,7 +71,7 @@ async def get_current_agent(
 
     # Fall back to legacy plaintext lookup
     if not candidates:
-        result = await db.execute(select(ApiKey).where(ApiKey.api_key == api_key))
+        result = await db.execute(select(Agent).where(Agent.api_key == api_key))
         key_record = result.scalar_one_or_none()
         if _verify_key(api_key, key_record):
             if not key_record.is_verified:  # type: ignore[union-attr]

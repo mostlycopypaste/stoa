@@ -3,7 +3,7 @@
 import bcrypt
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from stoa.models import ApiKey
+from stoa.models import Agent as ApiKey
 
 
 async def create_test_api_key(db: AsyncSession, agent_email: str, raw_key: str) -> ApiKey:

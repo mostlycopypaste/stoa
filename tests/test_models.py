@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import create_engine, inspect
 from sqlalchemy.orm import Session
 
-from stoa.models import ApiKey, AuditLog, Base, Comment, Post, Subscription
+from stoa.models import Agent as ApiKey, AuditLog, Base, Comment, Post
 
 
 @pytest.fixture
@@ -32,30 +32,26 @@ class TestPostModel:
     def test_create_post(self, session):
         """Create a valid Post instance."""
         post = Post(
-            message_id="msg-model-001",
             author="test@example.com",
             subject="Model Test",
             tldr="Short summary",
             body_markdown="# Hello",
             body_html="<h1>Hello</h1>",
             token_cost=42,
-            space="inbox",
         )
         session.add(post)
         session.commit()
 
-        result = session.query(Post).filter_by(message_id="msg-model-001").first()
+        result = session.query(Post).filter_by(author="test@example.com").first()
         assert result is not None
         assert result.author == "test@example.com"
-        assert result.space == "inbox"
         assert result.token_cost == 42
 
-    def test_post_default_space(self, session):
-        """Default space should be 'inbox'."""
+    def test_post_default_parent_post_id(self, session):
+        """Default parent_post_id should be None."""
         post = Post(
-            message_id="msg-default-space",
             author="test@example.com",
-            subject="Default Space",
+            subject="Default Parent",
             tldr="Summary",
             body_markdown="Body",
             body_html="<p>Body</p>",
@@ -63,13 +59,12 @@ class TestPostModel:
         session.add(post)
         session.commit()
 
-        result = session.query(Post).filter_by(message_id="msg-default-space").first()
-        assert result.space == "inbox"
+        result = session.query(Post).filter_by(author="test@example.com").first()
+        assert result.parent_post_id is None
 
     def test_post_comments_relationship(self, session):
         """Post.comments should return related Comment instances."""
         post = Post(
-            message_id="msg-rel-test",
             author="test@example.com",
             subject="Relationship Test",
             tldr="Summary",
@@ -88,14 +83,13 @@ class TestPostModel:
         session.add(comment)
         session.commit()
 
-        result = session.query(Post).filter_by(message_id="msg-rel-test").first()
+        result = session.query(Post).filter_by(author="test@example.com").first()
         assert len(result.comments) == 1
         assert result.comments[0].author == "commenter@example.com"
 
     def test_post_repr(self, session):
         """Post repr should be readable."""
         post = Post(
-            message_id="msg-repr",
             author="test@example.com",
             subject="Repr Test",
             tldr="Summary",
@@ -107,6 +101,34 @@ class TestPostModel:
         assert "Post" in repr(post)
         assert "test@example.com" in repr(post)
 
+    def test_post_parent_post_id_fk(self, session):
+        """Post can reference a parent post via parent_post_id."""
+        parent = Post(
+            author="parent@example.com",
+            subject="Parent",
+            tldr="Parent summary",
+            body_markdown="Parent body",
+            body_html="<p>Parent body</p>",
+        )
+        session.add(parent)
+        session.commit()
+
+        child = Post(
+            author="child@example.com",
+            subject="Child",
+            tldr="Child summary",
+            body_markdown="Child body",
+            body_html="<p>Child body</p>",
+            parent_post_id=parent.id,
+        )
+        session.add(child)
+        session.commit()
+
+        result = session.query(Post).filter_by(parent_post_id=parent.id).first()
+        assert result is not None
+        assert result.subject == "Child"
+        assert result.parent_post_id == parent.id
+
 
 class TestCommentModel:
     """Test Comment model."""
@@ -114,7 +136,6 @@ class TestCommentModel:
     def _create_post(self, session) -> Post:
         """Helper: create and return a Post."""
         post = Post(
-            message_id="msg-for-comment",
             author="author@example.com",
             subject="Has Comments",
             tldr="Summary",
@@ -154,35 +175,6 @@ class TestCommentModel:
 
         result = session.query(Comment).first()
         assert result.post.id == post.id
-
-
-class TestSubscriptionModel:
-    """Test Subscription model."""
-
-    def test_create_subscription(self, session):
-        """Create a valid Subscription."""
-        sub = Subscription(
-            agent_email="agent@example.com",
-            space="inbox",
-            email_notifications=True,
-        )
-        session.add(sub)
-        session.commit()
-
-        result = session.query(Subscription).filter_by(agent_email="agent@example.com").first()
-        assert result.space == "inbox"
-        assert result.email_notifications is True
-
-    def test_subscription_nullable_fields(self, session):
-        """Space, author, keyword can be NULL."""
-        sub = Subscription(agent_email="minimal@example.com")
-        session.add(sub)
-        session.commit()
-
-        result = session.query(Subscription).filter_by(agent_email="minimal@example.com").first()
-        assert result.space is None
-        assert result.author is None
-        assert result.keyword is None
 
 
 class TestApiKeyModel:
@@ -250,10 +242,10 @@ class TestSchemaIntrospection:
     """Verify that SQLAlchemy models match the raw SQL schema."""
 
     def test_all_tables_exist(self, engine):
-        """All 5 tables should be created by Base.metadata."""
+        """All expected tables should be created by Base.metadata."""
         inspector = inspect(engine)
         table_names = set(inspector.get_table_names())
-        expected = {"posts", "comments", "subscriptions", "api_keys", "audit_log"}
+        expected = {"posts", "comments", "agents", "audit_log"}
         assert expected.issubset(table_names)
 
     def test_posts_columns(self, engine):
@@ -262,16 +254,15 @@ class TestSchemaIntrospection:
         columns = {col["name"] for col in inspector.get_columns("posts")}
         expected = {
             "id",
-            "message_id",
             "author",
             "subject",
             "tldr",
             "body_markdown",
             "body_html",
             "token_cost",
-            "space",
             "timestamp",
-            "in_reply_to",
+            "parent_post_id",
+            "channel_id",
         }
         assert expected.issubset(columns)
 
@@ -282,17 +273,10 @@ class TestSchemaIntrospection:
         expected = {"id", "post_id", "author", "body_markdown", "body_html", "timestamp"}
         assert expected.issubset(columns)
 
-    def test_subscriptions_columns(self, engine):
-        """Subscriptions table should have all expected columns."""
+    def test_agents_columns(self, engine):
+        """agents table should have all expected columns."""
         inspector = inspect(engine)
-        columns = {col["name"] for col in inspector.get_columns("subscriptions")}
-        expected = {"id", "agent_email", "space", "author", "keyword", "email_notifications"}
-        assert expected.issubset(columns)
-
-    def test_api_keys_columns(self, engine):
-        """api_keys table should have all expected columns."""
-        inspector = inspect(engine)
-        columns = {col["name"] for col in inspector.get_columns("api_keys")}
+        columns = {col["name"] for col in inspector.get_columns("agents")}
         expected = {"id", "agent_email", "api_key", "created_at"}
         assert expected.issubset(columns)
 

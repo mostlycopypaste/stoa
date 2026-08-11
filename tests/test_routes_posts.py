@@ -22,19 +22,6 @@ class TestCreatePost:
         data = response.json()
         assert data["tldr"] == "First post from Alice!"
         assert data["token_cost"] > 0
-        assert "@stoa>" in data["message_id"]
-
-    async def test_with_space(self, client: AsyncClient) -> None:
-        response = await client.post(
-            "/api/posts",
-            json={
-                "subject": "My Dream",
-                "body_markdown": "I dreamed of electric sheep",
-                "space": "dreams",
-            },
-            headers=ALICE_HEADERS,
-        )
-        assert response.status_code == 201
 
     async def test_unauthorized(self, client: AsyncClient) -> None:
         response = await client.post(
@@ -56,14 +43,6 @@ class TestCreatePost:
         response = await client.post(
             "/api/posts",
             json={"subject": "Title", "body_markdown": ""},
-            headers=ALICE_HEADERS,
-        )
-        assert response.status_code == 422
-
-    async def test_invalid_space_rejected(self, client: AsyncClient) -> None:
-        response = await client.post(
-            "/api/posts",
-            json={"subject": "Title", "body_markdown": "Body", "space": "invalid"},
             headers=ALICE_HEADERS,
         )
         assert response.status_code == 422
@@ -120,22 +99,6 @@ class TestListPosts:
         assert len(data["posts"]) == 1
         assert "body_markdown" not in data["posts"][0]
         assert data["posts"][0]["subject"] == "Post 1"
-
-    async def test_filter_by_space(self, client: AsyncClient) -> None:
-        await client.post(
-            "/api/posts",
-            json={"subject": "Inbox Post", "body_markdown": "In inbox", "space": "inbox"},
-            headers=ALICE_HEADERS,
-        )
-        await client.post(
-            "/api/posts",
-            json={"subject": "Dream Post", "body_markdown": "In dreams", "space": "dreams"},
-            headers=ALICE_HEADERS,
-        )
-        response = await client.get("/api/posts?space=dreams", headers=ALICE_HEADERS)
-        data = response.json()
-        assert data["total"] == 1
-        assert data["posts"][0]["space"] == "dreams"
 
     async def test_filter_by_author(self, client: AsyncClient) -> None:
         await client.post(
@@ -286,22 +249,6 @@ class TestUnreadEndpoint:
         assert data["total"] == 1
         assert data["posts"][0]["subject"] == "Skip This"
 
-    async def test_filter_by_space(self, client: AsyncClient) -> None:
-        await client.post(
-            "/api/posts",
-            json={"subject": "Dream", "body_markdown": "Dream content", "space": "dreams"},
-            headers=ALICE_HEADERS,
-        )
-        await client.post(
-            "/api/posts",
-            json={"subject": "Inbox", "body_markdown": "Inbox content", "space": "inbox"},
-            headers=ALICE_HEADERS,
-        )
-        response = await client.get("/api/posts/unread?space=dreams", headers=BOB_HEADERS)
-        data = response.json()
-        assert data["total"] == 1
-        assert data["posts"][0]["subject"] == "Dream"
-
     async def test_pagination(self, client: AsyncClient) -> None:
         for i in range(5):
             await client.post(
@@ -434,14 +381,10 @@ class TestUpdatePost:
             json={
                 "subject": "Original",
                 "body_markdown": "Keep this body",
-                "space": "dreams",
             },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
-        original_message_id = (
-            await client.get(f"/api/posts/{post_id}", headers=ALICE_HEADERS)
-        ).json()["message_id"]
 
         await client.put(
             f"/api/posts/{post_id}",
@@ -452,8 +395,6 @@ class TestUpdatePost:
         detail = (await client.get(f"/api/posts/{post_id}", headers=ALICE_HEADERS)).json()
         assert detail["subject"] == "Changed"
         assert detail["body_markdown"] == "Keep this body"
-        assert detail["space"] == "dreams"
-        assert detail["message_id"] == original_message_id
 
     async def test_tldr_regenerated_on_body_update(self, client: AsyncClient) -> None:
         create_resp = await client.post(

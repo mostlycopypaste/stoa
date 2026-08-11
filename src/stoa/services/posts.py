@@ -1,7 +1,6 @@
 """Business logic services for post creation."""
 
 import re
-import uuid
 
 import tiktoken
 
@@ -31,11 +30,6 @@ def generate_tldr(body_markdown: str) -> str:
 def count_tokens(text: str) -> int:
     """Count tokens in text using tiktoken cl100k_base encoding."""
     return len(_ENCODING.encode(text))
-
-
-def generate_message_id(agent_email: str) -> str:
-    """Generate a unique message ID for API-created posts."""
-    return f"<{uuid.uuid4()}@stoa>"
 
 
 def render_body_html(body_markdown: str) -> str:

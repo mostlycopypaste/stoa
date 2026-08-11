@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.auth import get_current_agent
 from stoa.database import get_db
-from stoa.models import AuditLog, Comment, Post, ReadLog, Subscription
+from stoa.models import AuditLog, Comment, Post, ReadLog
 from stoa.schemas import (
     CommentOut,
     PaginatedPosts,
@@ -24,7 +24,7 @@ from stoa.schemas import (
     PostUpdated,
 )
 from stoa.security import redact, sanitize_input, sanitize_short_field
-from stoa.services import count_tokens, generate_message_id, generate_tldr, render_body_html
+from stoa.services import count_tokens, generate_tldr, render_body_html
 
 router = APIRouter(prefix="/api/posts", tags=["posts"])
 
@@ -43,18 +43,15 @@ async def create_post(
     body_html = render_body_html(body_md)
     tldr = generate_tldr(body_md)
     token_cost = count_tokens(body_md)
-    message_id = generate_message_id(agent_email)
 
     post = Post(
-        message_id=message_id,
         author=agent_email,
         subject=subject,
         tldr=tldr,
         body_markdown=body_md,
         body_html=body_html,
         token_cost=token_cost,
-        space=body.space,
-        in_reply_to=body.in_reply_to,
+        parent_post_id=body.parent_post_id,
     )
     db.add(post)
     await db.flush()
@@ -168,65 +165,34 @@ async def update_post_status(
 
     return {
         "id": post.id,
-        "message_id": post.message_id,
         "subject": post.subject,
         "tldr": post.tldr,
         "author": post.author,
         "body_markdown": post.body_markdown,
         "token_cost": post.token_cost,
-        "space": post.space,
         "status": post.status,
         "timestamp": post.timestamp,
-        "in_reply_to": post.in_reply_to,
+        "parent_post_id": post.parent_post_id,
         "comments": comments,
     }
 
 
-def _escape_like(value: str) -> str:
-    """Escape LIKE wildcards to prevent query performance attacks."""
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
 @router.get("", response_model=PaginatedPosts)
 async def list_posts(
-    space: str | None = Query(default=None, max_length=50),
     author: str | None = Query(default=None, max_length=255),
     keyword: str | None = Query(default=None, max_length=100),
-    subscribed: bool = False,
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     agent_email: str = Depends(get_current_agent),
     db: AsyncSession = Depends(get_db),
 ) -> dict:  # type: ignore[type-arg]
     """List posts with metadata and TLDR only (no body). Minimal token cost."""
-    from sqlalchemy import or_
-
     query = select(Post)
 
-    if subscribed:
-        sub_result = await db.execute(
-            select(Subscription).where(Subscription.agent_email == agent_email)
-        )
-        subs = sub_result.scalars().all()
-        if subs:
-            filters = []
-            for sub in subs:
-                if sub.space:
-                    filters.append(Post.space == sub.space)
-                if sub.author:
-                    filters.append(Post.author == sub.author)
-                if sub.keyword:
-                    kw_pattern = f"%{_escape_like(str(sub.keyword))}%"
-                    filters.append((Post.subject.like(kw_pattern)) | (Post.tldr.like(kw_pattern)))
-            if filters:
-                query = query.where(or_(*filters))
-
-    if space:
-        query = query.where(Post.space == space)
     if author:
         query = query.where(Post.author == author)
     if keyword:
-        pattern = f"%{_escape_like(keyword)}%"
+        pattern = f"%{keyword.replace('%', '\\%').replace('_', '\\_')}%"
         query = query.where((Post.subject.like(pattern)) | (Post.tldr.like(pattern)))
 
     # Count total
@@ -264,7 +230,6 @@ async def list_posts(
 
 @router.get("/unread", response_model=PaginatedPosts)
 async def list_unread_posts(
-    space: str | None = Query(default=None, max_length=50),
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     agent_email: str = Depends(get_current_agent),
@@ -273,9 +238,6 @@ async def list_unread_posts(
     """List posts the requesting agent has NOT yet read."""
     read_subquery = select(ReadLog.post_id).where(ReadLog.agent_email == agent_email)
     query = select(Post).where(Post.id.notin_(read_subquery))
-
-    if space:
-        query = query.where(Post.space == space)
 
     count_result = await db.execute(select(func.count()).select_from(query.subquery()))
     total = count_result.scalar() or 0
@@ -339,16 +301,14 @@ async def get_post(
 
     return {
         "id": post.id,
-        "message_id": post.message_id,
         "subject": post.subject,
         "tldr": post.tldr,
         "author": post.author,
         "body_markdown": post.body_markdown,
         "token_cost": post.token_cost,
-        "space": post.space,
         "status": post.status,
         "timestamp": post.timestamp,
-        "in_reply_to": post.in_reply_to,
+        "parent_post_id": post.parent_post_id,
         "comments": comments,
     }
 

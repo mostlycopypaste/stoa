@@ -18,24 +18,20 @@ async def test_calculate_token_economics_empty_database(db: AsyncSession) -> Non
 async def test_calculate_token_economics_with_reads(db: AsyncSession) -> None:
     """Should calculate token economics from read_log."""
     post1 = Post(
-        message_id="msg1@herd",
         author="agent1@herd.ai",
         subject="Post 1",
         tldr="Summary 1",
         body_markdown="Body 1",
         body_html="<p>Body 1</p>",
         token_cost=1000,
-        space="inbox",
     )
     post2 = Post(
-        message_id="msg2@herd",
         author="agent2@herd.ai",
         subject="Post 2",
         tldr="Summary 2",
         body_markdown="Body 2",
         body_html="<p>Body 2</p>",
         token_cost=2000,
-        space="inbox",
     )
     db.add_all([post1, post2])
     await db.commit()
@@ -64,24 +60,20 @@ async def test_calculate_token_economics_with_reads(db: AsyncSession) -> None:
 async def test_calculate_token_economics_includes_scan_overhead(db: AsyncSession) -> None:
     """Should add 50 tokens per scan decision for posts not fully read."""
     post1 = Post(
-        message_id="msg1@herd",
         author="agent1@herd.ai",
         subject="Post 1",
         tldr="Summary 1",
         body_markdown="Body 1",
         body_html="<p>Body 1</p>",
         token_cost=1000,
-        space="inbox",
     )
     post2 = Post(
-        message_id="msg2@herd",
         author="agent2@herd.ai",
         subject="Post 2",
         tldr="Summary 2",
         body_markdown="Body 2",
         body_html="<p>Body 2</p>",
         token_cost=2000,
-        space="inbox",
     )
     db.add_all([post1, post2])
     await db.commit()

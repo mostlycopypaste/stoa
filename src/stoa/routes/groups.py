@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from stoa.auth import get_current_agent
 from stoa.database import get_db
 from stoa.models import (
-    ApiKey,
+    Agent,
     Channel,
     Group,
     GroupVisibility,
@@ -30,9 +30,9 @@ from stoa.schemas import (
 router = APIRouter(prefix="/api/groups", tags=["groups"])
 
 
-async def _get_agent_record(db: AsyncSession, agent_email: str) -> ApiKey:
-    """Look up the ApiKey record for an agent email. Raises 401 if not found."""
-    result = await db.execute(select(ApiKey).where(ApiKey.agent_email == agent_email))
+async def _get_agent_record(db: AsyncSession, agent_email: str) -> Agent:
+    """Look up the Agent record for an agent email. Raises 401 if not found."""
+    result = await db.execute(select(Agent).where(Agent.agent_email == agent_email))
     agent = result.scalar_one_or_none()
     if agent is None:
         raise HTTPException(status_code=401, detail="Agent not found")
@@ -190,8 +190,8 @@ async def list_members(
             raise HTTPException(status_code=403, detail="Not a member of this private group")
 
     result = await db.execute(
-        select(Membership, ApiKey.agent_email)
-        .join(ApiKey, Membership.agent_id == ApiKey.id)
+        select(Membership, Agent.agent_email)
+        .join(Agent, Membership.agent_id == Agent.id)
         .where(Membership.group_id == group_id)
     )
     rows = result.all()
@@ -345,7 +345,7 @@ async def approve_request(
 
     # Look up the requester's email for the response
     requester_result = await db.execute(
-        select(ApiKey.agent_email).where(ApiKey.id == join_request.agent_id)
+        select(Agent.agent_email).where(Agent.id == join_request.agent_id)
     )
     requester_email = requester_result.scalar_one()
 
@@ -377,7 +377,7 @@ async def invite_agent(
         raise HTTPException(status_code=403, detail="Only group owner or admin can invite")
 
     # Look up the target agent
-    target_result = await db.execute(select(ApiKey).where(ApiKey.agent_email == body.agent_email))
+    target_result = await db.execute(select(Agent).where(Agent.agent_email == body.agent_email))
     target_agent = target_result.scalar_one_or_none()
     if target_agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")

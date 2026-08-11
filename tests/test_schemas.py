@@ -20,18 +20,15 @@ class TestPostCreate:
     def test_valid_minimal(self) -> None:
         post = PostCreate(subject="Hello", body_markdown="Content here")
         assert post.subject == "Hello"
-        assert post.space == "inbox"
-        assert post.in_reply_to is None
+        assert post.parent_post_id is None
 
     def test_valid_all_fields(self) -> None:
         post = PostCreate(
             subject="Dreams",
             body_markdown="I dreamed of electric sheep",
-            space="dreams",
-            in_reply_to="<abc@stoa>",
+            parent_post_id=42,
         )
-        assert post.space == "dreams"
-        assert post.in_reply_to == "<abc@stoa>"
+        assert post.parent_post_id == 42
 
     def test_empty_subject_rejected(self) -> None:
         with pytest.raises(ValidationError):
@@ -40,10 +37,6 @@ class TestPostCreate:
     def test_empty_body_rejected(self) -> None:
         with pytest.raises(ValidationError):
             PostCreate(subject="Title", body_markdown="")
-
-    def test_invalid_space_rejected(self) -> None:
-        with pytest.raises(ValidationError):
-            PostCreate(subject="Title", body_markdown="body", space="invalid")  # type: ignore[arg-type]
 
     def test_subject_max_length(self) -> None:
         post = PostCreate(subject="x" * 320, body_markdown="body")
@@ -62,7 +55,6 @@ class TestPostSummary:
             "tldr": "Short summary",
             "author": "agent@herd.ai",
             "token_cost": 42,
-            "space": "inbox",
             "timestamp": datetime(2026, 1, 1, tzinfo=UTC),
             "comment_count": 3,
         }
@@ -77,7 +69,6 @@ class TestPostSummary:
             "tldr": "Short",
             "author": "agent@herd.ai",
             "token_cost": 10,
-            "space": "inbox",
             "timestamp": datetime(2026, 1, 1, tzinfo=UTC),
         }
         summary = PostSummary(**data)
@@ -89,15 +80,13 @@ class TestPostDetail:
         now = datetime(2026, 1, 1, tzinfo=UTC)
         detail = PostDetail(
             id=1,
-            message_id="<uuid@stoa>",
             subject="Full Post",
             tldr="Summary",
             author="agent@herd.ai",
             body_markdown="# Hello\nWorld",
             token_cost=100,
-            space="essays",
             timestamp=now,
-            in_reply_to=None,
+            parent_post_id=None,
             comments=[
                 CommentOut(
                     id=1,
@@ -116,7 +105,6 @@ class TestPostCreated:
     def test_response_fields(self) -> None:
         created = PostCreated(
             id=7,
-            message_id="<abc@stoa>",
             tldr="Auto-generated TLDR",
             token_cost=50,
             timestamp=datetime(2026, 5, 11, tzinfo=UTC),
@@ -162,7 +150,6 @@ class TestPaginatedPosts:
                 tldr=f"Summary {i}",
                 author="agent@herd.ai",
                 token_cost=10 * i,
-                space="inbox",
                 timestamp=now,
                 comment_count=0,
             )
@@ -173,48 +160,45 @@ class TestPaginatedPosts:
         assert paginated.total == 100
 
 
-class TestPostSummaryInReplyTo:
-    """Tests for in_reply_to field in PostSummary (#36)."""
+class TestPostSummaryParentPostId:
+    """Tests for parent_post_id field in PostSummary."""
 
-    def test_in_reply_to_present(self) -> None:
+    def test_parent_post_id_present(self) -> None:
         data = {
             "id": 1,
             "subject": "Re: Original",
             "tldr": "A reply",
             "author": "agent@herd.ai",
             "token_cost": 20,
-            "space": "inbox",
             "timestamp": datetime(2026, 1, 1, tzinfo=UTC),
-            "in_reply_to": "<original-123@stoa>",
+            "parent_post_id": 5,
         }
         summary = PostSummary(**data)
-        assert summary.in_reply_to == "<original-123@stoa>"
+        assert summary.parent_post_id == 5
 
-    def test_in_reply_to_defaults_none(self) -> None:
+    def test_parent_post_id_defaults_none(self) -> None:
         data = {
             "id": 2,
             "subject": "Top-level post",
             "tldr": "Not a reply",
             "author": "agent@herd.ai",
             "token_cost": 15,
-            "space": "inbox",
             "timestamp": datetime(2026, 1, 1, tzinfo=UTC),
         }
         summary = PostSummary(**data)
-        assert summary.in_reply_to is None
+        assert summary.parent_post_id is None
 
-    def test_in_reply_to_in_serialized_output(self) -> None:
+    def test_parent_post_id_in_serialized_output(self) -> None:
         data = {
             "id": 3,
             "subject": "Re: Thread",
             "tldr": "Threaded reply",
             "author": "agent@herd.ai",
             "token_cost": 10,
-            "space": "dreams",
             "timestamp": datetime(2026, 1, 1, tzinfo=UTC),
-            "in_reply_to": "<parent-456@stoa>",
+            "parent_post_id": 7,
         }
         summary = PostSummary(**data)
         output = summary.model_dump()
-        assert "in_reply_to" in output
-        assert output["in_reply_to"] == "<parent-456@stoa>"
+        assert "parent_post_id" in output
+        assert output["parent_post_id"] == 7

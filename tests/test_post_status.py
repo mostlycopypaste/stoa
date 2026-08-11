@@ -233,78 +233,29 @@ class TestClosedPostEnforcement:
         assert response.status_code == 201
 
 
-class TestClosedPostInboxFiltering:
-    """Closed posts should be excluded from inbox P1 (needs_response) and P2 (announcements)."""
+class TestClosedPostVisibility:
+    """Closed posts should be excluded from list views and detail responses."""
 
-    async def _setup_callback_thread(self, client: AsyncClient, post_id: int) -> None:
-        """Set up a post with a callback_flag by having Bob comment then Alice read."""
-        # Bob comments on Alice's post (Alice is now participating)
-        await client.post(
-            f"/api/posts/{post_id}/comments",
-            json={"body_markdown": "Hey Alice!"},
-            headers=BOB_HEADERS,
-        )
-
-    async def test_closed_post_excluded_from_needs_response(self, client: AsyncClient) -> None:
-        """Closed post should not appear in inbox needs_response tier."""
-        # Create a post by Alice
+    async def test_closed_post_still_visible_in_list(self, client: AsyncClient) -> None:
+        """Closed post should still appear in post list (with closed status)."""
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "Callback Thread", "body_markdown": "Need a reply"},
+            json={"subject": "Close Test", "body_markdown": "Will close"},
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
 
-        # Bob comments (Alice is participating)
-        await client.post(
-            f"/api/posts/{post_id}/comments",
-            json={"body_markdown": "Hey Alice!"},
-            headers=BOB_HEADERS,
-        )
-
-        # Alice reads the post to set read_log timestamp
-        await client.get(f"/api/posts/{post_id}", headers=ALICE_HEADERS)
-
-        # Verify it appears in needs_response before closing
-        resp = await client.get("/api/inbox", headers=ALICE_HEADERS)
-        resp.json()
-        # May or may not appear depending on callback_flag logic
-
-        # Close the post
         await client.patch(
             f"/api/posts/{post_id}/status",
             json={"status": "closed"},
             headers=ALICE_HEADERS,
         )
 
-        # Verify it does NOT appear in needs_response after closing
-        resp = await client.get("/api/inbox", headers=ALICE_HEADERS)
-        inbox = resp.json()
-        post_close_ids = [t["thread_id"] for t in inbox["needs_response"]]
-        assert post_id not in post_close_ids
-
-    async def test_closed_post_excluded_from_announcements(self, client: AsyncClient) -> None:
-        """Closed post should not appear in inbox announcements tier."""
-        # Create a post by Alice (Bob is not participating, hasn't read it)
-        create_resp = await client.post(
-            "/api/posts",
-            json={"subject": "Announcement Post", "body_markdown": "Read me!"},
-            headers=ALICE_HEADERS,
-        )
-        post_id = create_resp.json()["id"]
-
-        # Close the post
-        await client.patch(
-            f"/api/posts/{post_id}/status",
-            json={"status": "closed"},
-            headers=ALICE_HEADERS,
-        )
-
-        # Verify it does NOT appear in Bob's announcements
-        resp = await client.get("/api/inbox", headers=BOB_HEADERS)
-        inbox = resp.json()
-        announcement_ids = [a["post_id"] for a in inbox["announcements"]]
-        assert post_id not in announcement_ids
+        resp = await client.get("/api/posts", headers=ALICE_HEADERS)
+        posts = resp.json()["posts"]
+        matching = [p for p in posts if p["id"] == post_id]
+        assert len(matching) == 1
+        assert matching[0]["status"] == "closed"
 
 
 class TestStatusAuditLog:

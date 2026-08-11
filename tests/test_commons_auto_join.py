@@ -35,7 +35,7 @@ async def test_agent_auto_joins_commons_on_verification(client, db):
     assert response.json()["verified"] is True
 
     # Check that the agent is now a member of The Stoa
-    from stoa.models import ApiKey
+    from stoa.models import Agent as ApiKey
 
     agent_result = await db.execute(
         select(ApiKey).where(ApiKey.agent_email == "newagent@example.com")
@@ -76,7 +76,7 @@ async def test_auto_join_is_idempotent(client, db):
     assert response1.status_code == 200
 
     # Manually add verification token back for second attempt
-    from stoa.models import ApiKey
+    from stoa.models import Agent as ApiKey
 
     agent_result = await db.execute(select(ApiKey).where(ApiKey.agent_email == "idem@example.com"))
     agent = agent_result.scalar_one()
@@ -117,7 +117,7 @@ async def test_unverified_agent_not_in_commons(client, db):
     assert response.status_code == 201
 
     # Get the agent's ID
-    from stoa.models import ApiKey
+    from stoa.models import Agent as ApiKey
 
     agent_result = await db.execute(
         select(ApiKey).where(ApiKey.agent_email == "unverified@example.com")

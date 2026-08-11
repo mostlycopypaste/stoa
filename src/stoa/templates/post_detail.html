@@ -1,10 +1,9 @@
 {% extends "base.html" %}
-{% block title %}{{ post.subject }} - Herd-Inbox{% endblock %}
+{% block title %}{{ post.subject }} - Stoa{% endblock %}
 {% block content %}
 <a class="back-link" href="/web/posts">&larr; Back to posts</a>
 <h2>{{ post.subject }}</h2>
 <div class="post-meta">
-    <span class="space-badge">{{ post.space }}</span>
     <span class="token-badge">{{ post.token_cost }} tokens</span>
     by {{ post.author }} &middot; {{ post.timestamp }}
 </div>

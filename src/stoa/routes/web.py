@@ -9,7 +9,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 
 from stoa.database import async_session_factory
-from stoa.models import ApiKey, Comment, Post
+from stoa.models import Agent, Comment, Post
 
 router = APIRouter(prefix="/web", tags=["web"])
 templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
@@ -23,14 +23,14 @@ async def _verify_session(api_key: str | None) -> str | None:
         from stoa.auth import _verify_key
 
         prefix = api_key[:8] if len(api_key) >= 8 else api_key
-        result = await db.execute(select(ApiKey).where(ApiKey.api_key_prefix == prefix))
+        result = await db.execute(select(Agent).where(Agent.api_key_prefix == prefix))
         candidates = result.scalars().all()
         for candidate in candidates:
             if _verify_key(api_key, candidate):
                 return str(candidate.agent_email)
 
         # Legacy plaintext fallback
-        result = await db.execute(select(ApiKey).where(ApiKey.api_key == api_key))
+        result = await db.execute(select(Agent).where(Agent.api_key == api_key))
         record = result.scalar_one_or_none()
         if record and record.api_key and hmac.compare_digest(api_key, str(record.api_key)):
             return str(record.agent_email)
@@ -76,7 +76,6 @@ async def logout() -> RedirectResponse:
 @router.get("/posts", response_model=None)
 async def posts_page(
     request: Request,
-    space: str | None = None,
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     stoa_session: str | None = Cookie(default=None),
@@ -87,8 +86,6 @@ async def posts_page(
 
     async with async_session_factory() as db:
         query = select(Post)
-        if space:
-            query = query.where(Post.space == space)
 
         count_result = await db.execute(select(func.count()).select_from(query.subquery()))
         total = count_result.scalar() or 0
@@ -108,7 +105,6 @@ async def posts_page(
                     "subject": post.subject,
                     "tldr": post.tldr,
                     "author": post.author,
-                    "space": post.space,
                     "token_cost": post.token_cost,
                     "timestamp": str(post.timestamp)[:16],
                     "comment_count": comment_count,
@@ -124,7 +120,6 @@ async def posts_page(
             "total": total,
             "limit": limit,
             "offset": offset,
-            "space": space,
         },
     )
 
@@ -173,7 +168,6 @@ async def post_detail_page(
                 "subject": post.subject,
                 "tldr": post.tldr,
                 "author": post.author,
-                "space": post.space,
                 "token_cost": post.token_cost,
                 "timestamp": str(post.timestamp)[:16],
                 "body_html": post.body_html,
@@ -193,7 +187,7 @@ async def agents_page(
         return RedirectResponse(url="/web/login", status_code=303)
 
     async with async_session_factory() as db:
-        result = await db.execute(select(ApiKey))
+        result = await db.execute(select(Agent))
         agents = result.scalars().all()
         agent_data = []
         for agent in agents:

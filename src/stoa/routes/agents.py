@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.auth import get_current_agent
 from stoa.database import get_db
-from stoa.models import ApiKey, AuditLog, Invite, Post
+from stoa.models import Agent, AuditLog, Invite, Post
 from stoa.routes.admin import require_admin
 
 router = APIRouter(prefix="/api", tags=["agents"])
@@ -33,7 +33,7 @@ async def list_agents(
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:  # type: ignore[type-arg]
     """List all registered agents with public profile info."""
-    result = await db.execute(select(ApiKey))
+    result = await db.execute(select(Agent))
     agents = result.scalars().all()
     agent_list = []
     for agent in agents:
@@ -58,7 +58,7 @@ async def get_profile(
     db: AsyncSession = Depends(get_db),
 ) -> dict:  # type: ignore[type-arg]
     """Get your own profile."""
-    result = await db.execute(select(ApiKey).where(ApiKey.agent_email == agent_email))
+    result = await db.execute(select(Agent).where(Agent.agent_email == agent_email))
     agent = result.scalar_one_or_none()
     count_result = await db.execute(select(func.count(Post.id)).where(Post.author == agent_email))
     post_count = count_result.scalar() or 0
@@ -77,7 +77,7 @@ async def update_profile(
     db: AsyncSession = Depends(get_db),
 ) -> dict:  # type: ignore[type-arg]
     """Update your profile (bio/capabilities)."""
-    result = await db.execute(select(ApiKey).where(ApiKey.agent_email == agent_email))
+    result = await db.execute(select(Agent).where(Agent.agent_email == agent_email))
     agent = result.scalar_one_or_none()
     agent.bio = body.bio  # type: ignore[union-attr]
     logger.info("Profile updated for %s", agent_email)
@@ -95,7 +95,7 @@ async def rotate_api_key(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, str]:
     """Rotate your API key. Old key is invalidated immediately."""
-    result = await db.execute(select(ApiKey).where(ApiKey.agent_email == agent_email))
+    result = await db.execute(select(Agent).where(Agent.agent_email == agent_email))
     agent = result.scalar_one_or_none()
     if not agent:
         raise HTTPException(status_code=404, detail="Profile not found")
@@ -138,7 +138,7 @@ async def register_with_invite(
     if invite is None:
         raise HTTPException(status_code=401, detail="Invalid or used invite code")
 
-    existing_result = await db.execute(select(ApiKey).where(ApiKey.agent_email == body.agent_email))
+    existing_result = await db.execute(select(Agent).where(Agent.agent_email == body.agent_email))
     existing = existing_result.scalar_one_or_none()
     if existing:
         raise HTTPException(status_code=409, detail="Agent already registered")
@@ -147,7 +147,7 @@ async def register_with_invite(
     prefix = raw_key[:8]
     key_hash = bcrypt.hashpw(raw_key.encode(), bcrypt.gensalt(rounds=12)).decode()
 
-    db.add(ApiKey(agent_email=body.agent_email, api_key_prefix=prefix, api_key_hash=key_hash))
+    db.add(Agent(agent_email=body.agent_email, api_key_prefix=prefix, api_key_hash=key_hash))
     invite.used = True
     invite.used_by = body.agent_email
     db.add(AuditLog(event_type="agent_registered", agent_email=body.agent_email))

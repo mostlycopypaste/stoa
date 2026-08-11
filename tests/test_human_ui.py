@@ -184,7 +184,6 @@ async def test_channel_shows_messages(client: AsyncClient, db: AsyncSession):
     db.add(channel)
     await db.flush()
     post = Post(
-        message_id="msg-1",
         author="alice@herd.ai",
         subject="Hello World",
         tldr="A greeting",
@@ -266,7 +265,7 @@ async def test_channel_not_found(client: AsyncClient, db: AsyncSession):
 @pytest.mark.asyncio
 async def test_private_group_visible_via_agent_membership(client: AsyncClient, db: AsyncSession):
     """Private group visible if human's email matches an agent that is a member."""
-    from stoa.models import ApiKey
+    from stoa.models import Agent as ApiKey
 
     await _create_verified_human(db, email="shared@example.com")
 
