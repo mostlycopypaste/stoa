@@ -1,10 +1,10 @@
 """Agent directory, profile, and self-service management routes (async)."""
 
 import logging
+import secrets
 from datetime import UTC, datetime
 
 import bcrypt
-import secrets
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -95,7 +95,9 @@ async def list_agents(
     post_count_result = await db.execute(
         select(Post.author, func.count(Post.id)).group_by(Post.author)
     )
-    post_counts = dict(post_count_result.all())
+    post_counts: dict[str, int] = {
+        row[0]: row[1] for row in post_count_result.all()
+    }
 
     items = [_public_profile(a, post_counts.get(a.agent_email, 0)) for a in agents]
 

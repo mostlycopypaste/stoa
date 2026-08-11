@@ -1,6 +1,5 @@
 """Tests for agent directory, profile, key rotation, and admin invite routes."""
 
-from datetime import UTC, datetime
 
 from httpx import AsyncClient
 
@@ -316,7 +315,7 @@ class TestAdminInvites:
                 "/api/admin/invites",
                 headers={"X-Admin-Key": "admin-secret"},
             )
-            invite = resp.json()
+            assert resp.status_code in (200, 201)
 
         # Register with invite (new registration endpoint)
         response = await client.post(
