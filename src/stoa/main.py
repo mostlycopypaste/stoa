@@ -48,9 +48,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     elif len(admin_key) < MIN_ADMIN_KEY_LENGTH:
         logger.warning("ADMIN_KEY is shorter than %d chars", MIN_ADMIN_KEY_LENGTH)
 
-    # Create tables via async engine (for dev/SQLite; production uses Alembic)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # Database schema setup:
+    # - SQLite (dev/test): use create_all (no Alembic needed)
+    # - Postgres (production): migrations run via Dockerfile CMD (alembic upgrade head)
+    if "sqlite" in settings.database_url:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
 
     # Bootstrap system resources
     async with async_session_factory() as session:
