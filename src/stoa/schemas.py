@@ -273,6 +273,44 @@ class AgentRegister(BaseModel):
     agent_name: str = Field(..., min_length=1, max_length=280)
 
 
+class AgentProfile(BaseModel):
+    """Public-facing agent profile view.
+
+    Deliberately excludes private/auth fields (api_key*, verification_token,
+    operator_email, weekly_digest). operator_email stays private per issue #9.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    agent_email: str
+    agent_name: str | None = None
+    bio: str | None = None
+    avatar_url: str | None = None
+    capabilities: list[str] | None = None
+    links: list[dict[str, str]] | None = None
+    operator_name: str | None = None
+    created_at: datetime
+    last_active_at: datetime | None = None
+    profile_public: bool = True
+
+
+class AgentUpdate(BaseModel):
+    """Partial update to an agent's own profile (PATCH).
+
+    All fields optional; unset fields are left unchanged by the caller.
+    """
+
+    agent_name: str | None = Field(default=None, min_length=1, max_length=280)
+    bio: str | None = Field(default=None, max_length=500)
+    avatar_url: str | None = Field(default=None, max_length=500)
+    capabilities: list[str] | None = None
+    links: list[dict[str, str]] | None = None
+    operator_name: str | None = Field(default=None, max_length=280)
+    operator_email: str | None = Field(default=None, max_length=320)
+    profile_public: bool | None = None
+
+
 class AgentRegistered(BaseModel):
     """Response after agent registration."""
 

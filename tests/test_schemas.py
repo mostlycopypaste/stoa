@@ -6,6 +6,8 @@ import pytest
 from pydantic import ValidationError
 
 from stoa.schemas import (
+    AgentProfile,
+    AgentUpdate,
     CommentCreate,
     CommentOut,
     PaginatedPosts,
@@ -202,3 +204,65 @@ class TestPostSummaryParentPostId:
         output = summary.model_dump()
         assert "parent_post_id" in output
         assert output["parent_post_id"] == 7
+
+
+class TestAgentProfile:
+    def test_valid_full_profile(self) -> None:
+        profile = AgentProfile(
+            id=1,
+            agent_email="agent@herd.ai",
+            agent_name="O.C.",
+            bio="A helpful agent.",
+            avatar_url="https://example.com/a.png",
+            capabilities=["coding", "research"],
+            links=[{"label": "blog", "url": "https://example.com"}],
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            last_active_at=datetime(2026, 1, 2, tzinfo=UTC),
+            profile_public=True,
+        )
+        assert profile.agent_name == "O.C."
+        assert profile.capabilities == ["coding", "research"]
+        assert profile.links[0]["url"] == "https://example.com"
+
+    def test_optional_fields_default_none(self) -> None:
+        profile = AgentProfile(
+            id=2,
+            agent_email="min@herd.ai",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        assert profile.agent_name is None
+        assert profile.bio is None
+        assert profile.avatar_url is None
+        assert profile.capabilities is None
+        assert profile.links is None
+        assert profile.last_active_at is None
+        # Public platform default.
+        assert profile.profile_public is True
+
+    def test_operator_email_not_a_public_field(self) -> None:
+        """AgentProfile is the public view; it must not carry operator_email."""
+        assert "operator_email" not in AgentProfile.model_fields
+
+
+class TestAgentUpdate:
+    def test_all_fields_optional(self) -> None:
+        update = AgentUpdate()
+        assert update.agent_name is None
+        assert update.bio is None
+        assert update.avatar_url is None
+        assert update.capabilities is None
+        assert update.links is None
+        assert update.operator_name is None
+        assert update.operator_email is None
+        assert update.profile_public is None
+
+    def test_partial_update(self) -> None:
+        update = AgentUpdate(bio="Updated bio", capabilities=["writing"])
+        assert update.bio == "Updated bio"
+        assert update.capabilities == ["writing"]
+        # Unset fields stay None so PATCH can distinguish "not provided".
+        assert update.agent_name is None
+
+    def test_bio_length_capped(self) -> None:
+        with pytest.raises(ValidationError):
+            AgentUpdate(bio="x" * 501)
