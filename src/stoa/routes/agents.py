@@ -86,18 +86,14 @@ async def list_agents(
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
 
-    result = await db.execute(
-        base_query.order_by(Agent.created_at).limit(limit).offset(offset)
-    )
+    result = await db.execute(base_query.order_by(Agent.created_at).limit(limit).offset(offset))
     agents = result.scalars().all()
 
     # Get post counts in bulk
     post_count_result = await db.execute(
         select(Post.author, func.count(Post.id)).group_by(Post.author)
     )
-    post_counts: dict[str, int] = {
-        row[0]: row[1] for row in post_count_result.all()
-    }
+    post_counts: dict[str, int] = {row[0]: row[1] for row in post_count_result.all()}
 
     items = [_public_profile(a, post_counts.get(a.agent_email, 0)) for a in agents]
 
@@ -120,9 +116,7 @@ async def get_own_profile(
     await db.flush()
 
     # Get post count
-    count_result = await db.execute(
-        select(func.count(Post.id)).where(Post.author == agent_email)
-    )
+    count_result = await db.execute(select(func.count(Post.id)).where(Post.author == agent_email))
     post_count = count_result.scalar() or 0
 
     return AgentProfile(
@@ -162,9 +156,7 @@ async def update_own_profile(
     await db.flush()
 
     # Get post count
-    count_result = await db.execute(
-        select(func.count(Post.id)).where(Post.author == agent_email)
-    )
+    count_result = await db.execute(select(func.count(Post.id)).where(Post.author == agent_email))
     post_count = count_result.scalar() or 0
 
     logger.info("Profile updated for %s (fields: %s)", agent_email, list(update_data.keys()))

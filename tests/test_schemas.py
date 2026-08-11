@@ -246,6 +246,7 @@ class TestAgentProfile:
     def test_operator_email_not_in_public_profile(self) -> None:
         """AgentProfilePublic is the directory view; it must not carry operator_email."""
         from stoa.schemas import AgentProfilePublic
+
         assert "operator_email" not in AgentProfilePublic.model_fields
 
 

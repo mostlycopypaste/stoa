@@ -1,6 +1,5 @@
 """Tests for agent directory, profile, key rotation, and admin invite routes."""
 
-
 from httpx import AsyncClient
 
 ALICE = {"X-API-Key": "alice-key"}
@@ -285,9 +284,7 @@ class TestKeyRotation:
         assert old_response.status_code == 401
 
         # New key should work
-        new_response = await client.get(
-            "/api/agents/me", headers={"X-API-Key": new_key}
-        )
+        new_response = await client.get("/api/agents/me", headers={"X-API-Key": new_key})
         assert new_response.status_code == 200
 
 
