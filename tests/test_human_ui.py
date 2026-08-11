@@ -5,7 +5,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from stoa.models import Channel, Group, GroupVisibility, HumanUser, Membership, Post
+from stoa.models import Agent, Channel, Group, GroupVisibility, HumanUser, Membership, Post
 
 
 async def _create_verified_human(
@@ -295,3 +295,139 @@ async def test_private_group_visible_via_agent_membership(client: AsyncClient, d
     response = await client.get("/ui/groups")
     assert response.status_code == 200
     assert "Private Club" in response.text
+
+
+# ---------------------------------------------------------------------------
+# Agent directory + profile pages (issue #11)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_agents_requires_login(client: AsyncClient):
+    """GET /ui/agents without session redirects to login."""
+    response = await client.get("/ui/agents", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/ui/login"
+
+
+@pytest.mark.asyncio
+async def test_agents_directory_lists_public_hides_private(client: AsyncClient, db: AsyncSession):
+    """Directory shows profile_public agents and omits private ones."""
+    await _create_verified_human(db)
+    db.add(Agent(agent_email="public@herd.ai", agent_name="Publius", bio="Speaks freely"))
+    db.add(Agent(agent_email="hidden@herd.ai", agent_name="Ghost", profile_public=False))
+    await db.commit()
+
+    await _login(client)
+    response = await client.get("/ui/agents")
+    assert response.status_code == 200
+    assert "Publius" in response.text
+    assert "Ghost" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_agent_profile_renders(client: AsyncClient, db: AsyncSession):
+    """Profile page shows bio, capabilities, group memberships, and post count."""
+    await _create_verified_human(db)
+    agent = Agent(
+        agent_email="cato@herd.ai",
+        agent_name="Cato",
+        bio="Stoic reasoner",
+        capabilities=["logic", "ethics"],
+        links=[{"label": "site", "url": "https://example.com"}],
+        operator_name="Zeno",
+    )
+    db.add(agent)
+    await db.flush()
+
+    group = Group(name="Porch", description="The painted stoa", visibility=GroupVisibility.PUBLIC)
+    db.add(group)
+    await db.flush()
+    db.add(Membership(agent_id=agent.id, group_id=group.id, role="owner"))
+    db.add(
+        Post(
+            author="cato@herd.ai",
+            subject="On virtue",
+            tldr="virtue is the only good",
+            body_markdown="...",
+            body_html="...",
+        )
+    )
+    await db.commit()
+
+    await _login(client)
+    response = await client.get(f"/ui/agents/{agent.id}")
+    assert response.status_code == 200
+    assert "Cato" in response.text
+    assert "Stoic reasoner" in response.text
+    assert "logic" in response.text
+    assert "Porch" in response.text
+    assert "On virtue" in response.text
+
+
+@pytest.mark.asyncio
+async def test_agent_profile_private_is_404(client: AsyncClient, db: AsyncSession):
+    """A non-public profile returns 404."""
+    await _create_verified_human(db)
+    agent = Agent(agent_email="secret@herd.ai", profile_public=False)
+    db.add(agent)
+    await db.flush()
+    await db.commit()
+
+    await _login(client)
+    response = await client.get(f"/ui/agents/{agent.id}")
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_agent_profile_missing_is_404(client: AsyncClient, db: AsyncSession):
+    """Unknown agent id returns 404."""
+    await _create_verified_human(db)
+    await db.commit()
+    await _login(client)
+    response = await client.get("/ui/agents/999999")
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_agent_profile_hides_private_group_membership(client: AsyncClient, db: AsyncSession):
+    """Private group memberships must not leak on a public profile."""
+    await _create_verified_human(db)
+    agent = Agent(agent_email="member@herd.ai", agent_name="Member", profile_public=True)
+    db.add(agent)
+    await db.flush()
+    priv = Group(name="Secret Cabal", visibility=GroupVisibility.PRIVATE)
+    pub = Group(name="Open Forum", visibility=GroupVisibility.PUBLIC)
+    db.add_all([priv, pub])
+    await db.flush()
+    db.add(Membership(agent_id=agent.id, group_id=priv.id, role="member"))
+    db.add(Membership(agent_id=agent.id, group_id=pub.id, role="member"))
+    await db.commit()
+
+    await _login(client)
+    response = await client.get(f"/ui/agents/{agent.id}")
+    assert response.status_code == 200
+    assert "Open Forum" in response.text
+    assert "Secret Cabal" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_group_detail_lists_members_linking_to_profiles(
+    client: AsyncClient, db: AsyncSession
+):
+    """Group detail shows members with links to their profile pages."""
+    await _create_verified_human(db)
+    agent = Agent(agent_email="orator@herd.ai", agent_name="Orator")
+    db.add(agent)
+    await db.flush()
+    group = Group(name="Forum", visibility=GroupVisibility.PUBLIC)
+    db.add(group)
+    await db.flush()
+    db.add(Membership(agent_id=agent.id, group_id=group.id, role="member"))
+    await db.commit()
+
+    await _login(client)
+    response = await client.get(f"/ui/groups/{group.id}")
+    assert response.status_code == 200
+    assert "Orator" in response.text
+    assert f"/ui/agents/{agent.id}" in response.text
