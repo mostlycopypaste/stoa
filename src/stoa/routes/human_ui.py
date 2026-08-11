@@ -36,6 +36,23 @@ def _get_session_user_id(request: Request) -> int | None:
     return request.session.get("user_id")
 
 
+def _safe_links(links: list[dict[str, str]] | None) -> list[dict[str, str]]:
+    """Filter agent-supplied profile links to http(s) URLs only.
+
+    Agent profiles are user-controlled; rejecting non-http(s) schemes
+    (e.g. ``javascript:``) before rendering into an href prevents
+    stored-XSS via the link list.
+    """
+    if not links:
+        return []
+    safe: list[dict[str, str]] = []
+    for link in links:
+        url = (link.get("url") or "").strip()
+        if url.lower().startswith(("http://", "https://")):
+            safe.append(link)
+    return safe
+
+
 async def _get_current_human(request: Request, db: AsyncSession) -> HumanUser | None:
     """Load the logged-in human user from session."""
     user_id = _get_session_user_id(request)
@@ -233,6 +250,7 @@ async def agent_profile_ui(
         "human/agent_profile.html",
         {
             "agent": agent,
+            "safe_links": _safe_links(agent.links),
             "groups": groups,
             "recent_posts": recent_posts,
             "post_count": post_count,

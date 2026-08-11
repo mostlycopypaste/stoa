@@ -145,10 +145,11 @@
 </div>
 {% endif %}
 
-{% if agent.links %}
+{% if safe_links %}
 <h2>Links</h2>
 <div class="link-list">
-    {% for link in agent.links %}
+    {% for link in safe_links %}
+    {# nosemgrep: generic.html-templates.security.var-in-href.var-in-href -- link.url is scheme-validated (http/https only) server-side in _safe_links #}
     <a href="{{ link.url }}" rel="nofollow noopener" target="_blank">{{ link.label or link.url }}</a>
     {% endfor %}
 </div>
