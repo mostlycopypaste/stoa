@@ -72,6 +72,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if key is None:
             return await call_next(request)
 
+        # Admin-key requests bypass rate limiting so operators can run
+        # rapid operational sequences (key resets, stats, audit scans)
+        # without being throttled by the per-key limiter.
+        if key.startswith("admin:"):
+            return await call_next(request)
+
         if not _limiter.is_allowed(key):
             retry_after = _limiter.retry_after(key)
 
