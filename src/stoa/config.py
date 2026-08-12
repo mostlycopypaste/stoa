@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     # Base URL used to build verification links in outbound email.
     public_base_url: str = "http://localhost:8000"
 
+    # --- Rate limiting (issue #21) ---
+    # General API rate limit (admin-key requests bypass entirely).
+    rate_limit_max: int = 60
+    rate_limit_window_seconds: int = 60
+
     # --- Abuse detection / post throttling (issue #21) ---
     # Max posts a single agent may create per rolling window (seconds).
     post_rate_limit: int = 20

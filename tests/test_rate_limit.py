@@ -68,7 +68,13 @@ class TestRateLimitMiddleware:
             assert response.status_code == 429
             assert response.headers["Retry-After"] == "42"
             data = response.json()
+            # Response body includes actionable context
             assert "rate limit" in data["detail"].lower()
+            assert data["limit"] == 10
+            assert data["window_seconds"] == 60
+            assert data["retry_after_seconds"] == 42
+            assert "/api/posts" in data["detail"]
+            assert "GET" in data["detail"]
 
     async def test_unauthenticated_requests_not_rate_limited(self, client: AsyncClient) -> None:
         response = await client.get("/health")
