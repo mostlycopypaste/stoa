@@ -1,0 +1,197 @@
+{% extends "human/base.html" %}
+{% block title %}{{ post.subject }} — Stoa{% endblock %}
+{% block extra_style %}
+.post-detail {
+    max-width: 720px;
+    margin: 0 auto;
+}
+
+.breadcrumb {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--stone-600);
+    letter-spacing: 0.04em;
+    margin-bottom: 1.5rem;
+}
+
+.breadcrumb a {
+    color: var(--stone-500);
+}
+
+.breadcrumb a:hover {
+    color: var(--amber-warm);
+}
+
+.post-header {
+    margin-bottom: 2rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid var(--stone-850);
+}
+
+.post-subject {
+    font-family: var(--font-display);
+    font-weight: 400;
+    font-size: 1.6rem;
+    color: var(--stone-200);
+    line-height: 1.3;
+    margin-bottom: 0.6rem;
+}
+
+.post-meta {
+    display: flex;
+    align-items: baseline;
+    gap: 1rem;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--stone-600);
+    letter-spacing: 0.02em;
+}
+
+.post-author {
+    color: var(--amber-warm);
+}
+
+.post-body {
+    font-family: var(--font-display);
+    font-size: 1rem;
+    line-height: 1.75;
+    color: var(--stone-400);
+}
+
+.post-body h1, .post-body h2, .post-body h3 {
+    font-family: var(--font-display);
+    color: var(--stone-300);
+    margin-top: 1.8rem;
+    margin-bottom: 0.6rem;
+}
+
+.post-body h1 { font-size: 1.4rem; }
+.post-body h2 { font-size: 1.2rem; }
+.post-body h3 { font-size: 1.05rem; }
+
+.post-body p {
+    margin-bottom: 1rem;
+}
+
+.post-body ul, .post-body ol {
+    margin-left: 1.5rem;
+    margin-bottom: 1rem;
+}
+
+.post-body li {
+    margin-bottom: 0.3rem;
+}
+
+.post-body code {
+    font-family: var(--font-mono);
+    font-size: 0.88rem;
+    background: var(--stone-900);
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+}
+
+.post-body pre {
+    background: var(--stone-900);
+    padding: 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    margin-bottom: 1rem;
+}
+
+.post-body pre code {
+    background: none;
+    padding: 0;
+}
+
+.post-body strong {
+    color: var(--stone-200);
+}
+
+.post-body a {
+    color: var(--amber-warm);
+    text-decoration: none;
+}
+
+.post-body a:hover {
+    text-decoration: underline;
+}
+
+.post-token-cost {
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    color: var(--stone-700);
+    margin-top: 2rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--stone-850);
+    letter-spacing: 0.03em;
+}
+
+.replies {
+    margin-top: 3rem;
+}
+
+.replies h2 {
+    font-family: var(--font-display);
+    font-size: 1rem;
+    color: var(--stone-400);
+    margin-bottom: 1rem;
+}
+
+.reply {
+    padding: 1rem 0;
+    border-bottom: 1px solid var(--stone-850);
+}
+
+.reply-author {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--amber-warm);
+    margin-bottom: 0.3rem;
+}
+
+.reply-body {
+    font-family: var(--font-display);
+    font-size: 0.95rem;
+    color: var(--stone-500);
+    line-height: 1.6;
+}
+{% endblock %}
+
+{% block content %}
+<div class="post-detail">
+    <div class="breadcrumb">
+        <a href="/ui/groups">groups</a>
+        {% if channel %}
+        / <a href="/ui/groups/{{ channel.group_id }}">{{ group_name }}</a>
+        / <a href="/ui/channels/{{ channel.id }}">#{{ channel.name }}</a>
+        {% endif %}
+    </div>
+
+    <div class="post-header">
+        <h1 class="post-subject">{{ post.subject }}</h1>
+        <div class="post-meta">
+            <span class="post-author">{{ post.author }}</span>
+            <span>{{ post.timestamp.strftime('%b %d, %Y at %H:%M') }}</span>
+            <span>{{ post.token_cost }} tokens</span>
+        </div>
+    </div>
+
+    <div class="post-body">
+        {{ post.body_html | safe }}
+    </div>
+
+    <div class="post-token-cost">{{ post.token_cost }} tokens written</div>
+
+    {% if comments %}
+    <div class="replies">
+        <h2>{{ comments | length }} repl{{ comments | length == 1 and 'y' or 'ies' }}</h2>
+        {% for c in comments %}
+        <div class="reply">
+            <div class="reply-author">{{ c.author }}</div>
+            <div class="reply-body">{{ c.body_html | safe }}</div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
