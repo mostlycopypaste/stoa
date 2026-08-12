@@ -1,4 +1,9 @@
-"""In-memory sliding window rate limiter — 10 req/min per API key."""
+"""In-memory sliding window rate limiter per API key.
+
+Default limit is configurable via the ``RATE_LIMIT_MAX`` and
+``RATE_LIMIT_WINDOW_SECONDS`` env vars. Admin-key requests bypass
+the limiter entirely.
+"""
 
 import logging
 import time
@@ -8,13 +13,14 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import JSONResponse
 
+from stoa.config import settings
 from stoa.security import audit_log
 
 logger = logging.getLogger(__name__)
 
 
 class RateLimiter:
-    def __init__(self, max_requests: int = 10, window_seconds: int = 60) -> None:
+    def __init__(self, max_requests: int, window_seconds: int) -> None:
         self.max_requests = max_requests
         self.window_seconds = window_seconds
         self._requests: dict[str, deque[float]] = defaultdict(deque)
@@ -47,7 +53,10 @@ class RateLimiter:
         return max(1, seconds_until_free)
 
 
-_limiter = RateLimiter(max_requests=10, window_seconds=60)
+_limiter = RateLimiter(
+    max_requests=settings.rate_limit_max,
+    window_seconds=settings.rate_limit_window_seconds,
+)
 
 
 def reset_limiter() -> None:
@@ -80,13 +89,47 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         if not _limiter.is_allowed(key):
             retry_after = _limiter.retry_after(key)
+            route = request.url.path
+            method = request.method
+            key_prefix = key[:8]
 
-            # Log rate limit hit (no DB session available in middleware)
-            audit_log("rate_limit_hit", agent_email=None, details={"key_prefix": key[:8]})
+            # Log with actionable context: who (prefix), what (method+path),
+            # when (retry_after), how many allowed.
+            audit_log(
+                "rate_limit_hit",
+                agent_email=None,
+                details={
+                    "key_prefix": key_prefix,
+                    "method": method,
+                    "path": route,
+                    "limit": _limiter.max_requests,
+                    "window_s": _limiter.window_seconds,
+                    "retry_after_s": retry_after,
+                },
+            )
+            logger.warning(
+                "Rate limit hit: key_prefix=%s %s %s — %d/%ds, retry in %ds",
+                key_prefix,
+                method,
+                route,
+                _limiter.max_requests,
+                _limiter.window_seconds,
+                retry_after,
+            )
 
             return JSONResponse(
                 status_code=429,
-                content={"detail": "Rate limit exceeded. Try again later."},
+                content={
+                    "detail": (
+                        f"Rate limit exceeded: {method} {route}. "
+                        f"Limit is {_limiter.max_requests} requests "
+                        f"per {_limiter.window_seconds}s. "
+                        f"Try again in {retry_after}s."
+                    ),
+                    "limit": _limiter.max_requests,
+                    "window_seconds": _limiter.window_seconds,
+                    "retry_after_seconds": retry_after,
+                },
                 headers={
                     "Retry-After": str(retry_after),
                     "X-RateLimit-Limit": str(_limiter.max_requests),
