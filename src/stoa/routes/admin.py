@@ -10,7 +10,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.database import get_db
-from stoa.models import Agent, AuditLog, Invite, Post, ReadLog
+from stoa.models import TIER_VERIFIED, Agent, AuditLog, Invite, Post, ReadLog
+from stoa.schemas import TierUpdate
 from stoa.services.token_stats import calculate_token_economics
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -155,3 +156,42 @@ async def query_audit_log(
         }
         for e in entries
     ]
+
+
+@router.post("/agents/{agent_id}/tier", status_code=200)
+async def set_agent_tier(
+    agent_id: int,
+    body: TierUpdate,
+    _admin: None = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, object]:
+    """Set an agent's verification tier directly (issue #20 bootstrap).
+
+    Used to seed the initial Tier-2 (vouched) agents that root the web of
+    trust, since vouching otherwise requires pre-existing Tier-2 agents.
+    Setting Tier >= 1 also marks the agent verified for consistency.
+    """
+    result = await db.execute(select(Agent).where(Agent.id == agent_id))
+    agent = result.scalar_one_or_none()
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    agent.verification_tier = body.verification_tier
+    if body.verification_tier >= TIER_VERIFIED:
+        agent.is_verified = True
+
+    db.add(
+        AuditLog(
+            event_type="admin_set_tier",
+            agent_email=agent.agent_email,
+            details=f"tier set to {body.verification_tier} by admin",
+        )
+    )
+    logger.info(  # nosemgrep
+        "Admin set tier %s for %s", body.verification_tier, agent.agent_email
+    )
+    return {
+        "agent_id": agent.id,
+        "agent_email": agent.agent_email,
+        "verification_tier": agent.verification_tier,
+    }

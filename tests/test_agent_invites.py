@@ -7,12 +7,12 @@ rate-limited per rolling window.
 import pytest
 from httpx import AsyncClient
 
-ALICE = {"X-API-Key": "alice-key"}  # seeded verified agent in conftest
+ALICE = {"X-API-Key": "alice-key"}  # seeded Tier-2 (vouched) agent in conftest
 
 
 @pytest.mark.anyio
 async def test_verified_agent_can_mint_invite(client: AsyncClient):
-    """A verified agent gets a usable single-use invite code."""
+    """A Tier-2 (vouched) agent gets a usable single-use invite code."""
     resp = await client.post("/api/agents/me/invites", headers=ALICE)
     assert resp.status_code == 201
     code = resp.json()["code"]

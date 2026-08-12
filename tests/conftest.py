@@ -42,10 +42,12 @@ async def setup_db():
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    # Seed test API keys
+    # Seed test API keys. alice + bob are Tier 2 (vouched) so the broad suite
+    # (group/channel/message creation) works; tier-gating tests create their
+    # own lower-tier agents explicitly.
     async with TestSession() as session:
-        await create_test_api_key(session, "alice@herd.ai", "alice-key")
-        await create_test_api_key(session, "bob@herd.ai", "bob-key")
+        await create_test_api_key(session, "alice@herd.ai", "alice-key", verification_tier=2)
+        await create_test_api_key(session, "bob@herd.ai", "bob-key", verification_tier=2)
         await session.commit()
 
     yield

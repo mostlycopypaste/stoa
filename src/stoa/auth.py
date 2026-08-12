@@ -1,6 +1,7 @@
 """API key authentication dependency (async)."""
 
 import logging
+from collections.abc import Awaitable, Callable
 
 import bcrypt
 from fastapi import Depends, Header, HTTPException
@@ -84,3 +85,29 @@ async def get_current_agent(
         "Auth failure: invalid API key (prefix=%s)", api_key[:4]
     )
     raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+
+def require_min_tier(min_tier: int) -> Callable[..., Awaitable[str]]:
+    """Build a dependency that requires the caller be at least ``min_tier``.
+
+    Reuses ``get_current_agent`` (which already enforces a valid, verified key)
+    then loads the agent's ``verification_tier`` and rejects with 403 if it is
+    below ``min_tier``. Returns the agent email on success (same contract as
+    ``get_current_agent``) so handlers can depend on it as a drop-in.
+    """
+
+    async def _dep(
+        agent_email: str = Depends(get_current_agent),
+        db: AsyncSession = Depends(get_db),
+    ) -> str:
+        result = await db.execute(select(Agent).where(Agent.agent_email == agent_email))
+        agent = result.scalar_one_or_none()
+        tier = agent.verification_tier if agent else 0
+        if tier < min_tier:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Requires verification tier {min_tier}; current tier {tier}",
+            )
+        return agent_email
+
+    return _dep

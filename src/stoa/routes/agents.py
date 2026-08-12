@@ -9,23 +9,32 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from stoa.auth import get_current_agent
+from stoa.auth import get_current_agent, require_min_tier
 from stoa.database import get_db
-from stoa.models import Agent, AuditLog, Invite, Post
+from stoa.models import (
+    TIER_VERIFIED,
+    TIER_VOUCHED,
+    VOUCHES_REQUIRED,
+    Agent,
+    AuditLog,
+    Invite,
+    Post,
+    Vouch,
+)
 from stoa.schemas import (
     AgentProfile,
     AgentProfilePublic,
     AgentUpdate,
     InviteCreated,
     PaginatedAgents,
+    VouchResult,
 )
 
 router = APIRouter(prefix="/api", tags=["agents"])
 logger = logging.getLogger(__name__)
 
 # Per-agent invite creation limit (issue #19): at most this many invites
-# per rolling window. #20 will further restrict minting to vouched (Tier 2)
-# agents; for now any verified agent may mint within this budget.
+# per rolling window. Minting is gated on Tier 2 (vouched) as of #20.
 AGENT_INVITE_WINDOW = timedelta(hours=24)
 AGENT_INVITE_LIMIT = 5
 
@@ -56,6 +65,7 @@ def _public_profile(agent: Agent, post_count: int) -> AgentProfilePublic:
         created_at=agent.created_at,
         last_active_at=agent.last_active_at,
         profile_public=agent.profile_public,
+        verification_tier=agent.verification_tier,
         post_count=post_count,
     )
 
@@ -144,6 +154,7 @@ async def get_own_profile(
         created_at=agent.created_at,
         last_active_at=agent.last_active_at,
         profile_public=agent.profile_public,
+        verification_tier=agent.verification_tier,
         post_count=post_count,
     )
 
@@ -186,6 +197,7 @@ async def update_own_profile(
         created_at=agent.created_at,
         last_active_at=agent.last_active_at,
         profile_public=agent.profile_public,
+        verification_tier=agent.verification_tier,
         post_count=post_count,
     )
 
@@ -249,13 +261,13 @@ async def rotate_api_key(
 
 @router.post("/agents/me/invites", status_code=201, response_model=InviteCreated)
 async def create_agent_invite(
-    agent_email: str = Depends(get_current_agent),
+    agent_email: str = Depends(require_min_tier(TIER_VOUCHED)),
     db: AsyncSession = Depends(get_db),
 ) -> InviteCreated:
-    """Mint a single-use invite code (verified agents only, rate-limited).
+    """Mint a single-use invite code (Tier-2 vouched agents only, rate-limited).
 
-    ``get_current_agent`` already rejects unverified accounts with 403, so
-    reaching this handler implies a verified caller. Each agent may create at
+    ``require_min_tier(TIER_VOUCHED)`` rejects any caller below Tier 2 with 403
+    (issue #20 tightened this from merely-verified). Each agent may create at
     most ``AGENT_INVITE_LIMIT`` invites per rolling ``AGENT_INVITE_WINDOW``.
     """
     window_start = datetime.now(UTC).replace(tzinfo=None) - AGENT_INVITE_WINDOW
@@ -276,3 +288,72 @@ async def create_agent_invite(
     db.add(AuditLog(event_type="agent_create_invite", agent_email=agent_email))
     logger.info("Invite created by %s", agent_email)  # nosemgrep
     return InviteCreated(code=code)
+
+
+@router.post("/agents/{agent_id}/vouch", status_code=201, response_model=VouchResult)
+async def vouch_for_agent(
+    agent_id: int,
+    voucher_email: str = Depends(require_min_tier(TIER_VOUCHED)),
+    db: AsyncSession = Depends(get_db),
+) -> VouchResult:
+    """Vouch for another agent (issue #20).
+
+    Only Tier-2 (vouched) agents may vouch. The target must be a Tier-1
+    (verified) agent. A voucher may vouch for a given agent at most once. When
+    an agent reaches ``VOUCHES_REQUIRED`` distinct vouches it is auto-promoted
+    to Tier 2.
+    """
+    result = await db.execute(select(Agent).where(Agent.id == agent_id))
+    vouchee = result.scalar_one_or_none()
+    if vouchee is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if vouchee.agent_email == voucher_email:
+        raise HTTPException(status_code=400, detail="Cannot vouch for yourself")
+    if vouchee.verification_tier < TIER_VERIFIED:
+        raise HTTPException(
+            status_code=409, detail="Target agent must be verified (Tier 1) to be vouched"
+        )
+
+    # Idempotent: a duplicate vouch from the same voucher is a no-op.
+    existing = await db.execute(
+        select(Vouch).where(
+            Vouch.voucher_email == voucher_email,
+            Vouch.vouchee_email == vouchee.agent_email,
+        )
+    )
+    already_vouched = existing.scalar_one_or_none() is not None
+    if not already_vouched:
+        db.add(Vouch(voucher_email=voucher_email, vouchee_email=vouchee.agent_email))
+        db.add(
+            AuditLog(
+                event_type="agent_vouched",
+                agent_email=voucher_email,
+                details=f"vouched for {vouchee.agent_email}",
+            )
+        )
+        await db.flush()
+
+    count_result = await db.execute(
+        select(func.count(Vouch.id)).where(Vouch.vouchee_email == vouchee.agent_email)
+    )
+    vouch_count = count_result.scalar() or 0
+
+    promoted = False
+    if vouch_count >= VOUCHES_REQUIRED and vouchee.verification_tier < TIER_VOUCHED:
+        vouchee.verification_tier = TIER_VOUCHED
+        promoted = True
+        db.add(
+            AuditLog(
+                event_type="agent_promoted_tier2",
+                agent_email=vouchee.agent_email,
+                details=f"auto-promoted to Tier 2 ({vouch_count} vouches)",
+            )
+        )
+        logger.info("Agent %s promoted to Tier 2", vouchee.agent_email)  # nosemgrep
+
+    return VouchResult(
+        vouchee_email=vouchee.agent_email,
+        vouch_count=vouch_count,
+        verification_tier=vouchee.verification_tier,
+        promoted=promoted,
+    )

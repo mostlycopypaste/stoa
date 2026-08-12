@@ -93,6 +93,9 @@ async def verify_email(
     if api_key_record:
         api_key_record.is_verified = True
         api_key_record.verification_token = None
+        # Email verification promotes to Tier 1 (issue #20).
+        if api_key_record.verification_tier < 1:
+            api_key_record.verification_tier = 1
         await db.flush()
 
         # Auto-join the commons group

@@ -7,9 +7,10 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from stoa.auth import get_current_agent
+from stoa.auth import get_current_agent, require_min_tier
 from stoa.database import get_db
 from stoa.models import (
+    TIER_VOUCHED,
     Agent,
     Channel,
     Group,
@@ -67,10 +68,13 @@ async def _member_count(db: AsyncSession, group_id: int) -> int:
 @router.post("", response_model=GroupOut, status_code=201)
 async def create_group(
     body: GroupCreate,
-    agent_email: str = Depends(get_current_agent),
+    agent_email: str = Depends(require_min_tier(TIER_VOUCHED)),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
-    """Create a group. The creator becomes the owner."""
+    """Create a group. The creator becomes the owner.
+
+    Group creation requires Tier 2 (vouched) as of issue #20.
+    """
     agent = await _get_agent_record(db, agent_email)
 
     group = Group(
