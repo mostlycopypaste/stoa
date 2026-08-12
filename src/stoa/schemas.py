@@ -290,6 +290,7 @@ class AgentRegister(BaseModel):
 
     email: str = Field(..., min_length=5, max_length=320)
     agent_name: str = Field(..., min_length=1, max_length=280)
+    invite_code: str = Field(..., min_length=1, max_length=255)
 
 
 class AgentProfilePublic(BaseModel):
@@ -384,6 +385,12 @@ class AgentRegistered(BaseModel):
     api_key: str
     verification_token: str
     message: str
+
+
+class InviteCreated(BaseModel):
+    """Response after minting a single-use invite code."""
+
+    code: str
 
 
 class HumanRegister(BaseModel):

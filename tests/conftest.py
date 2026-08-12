@@ -1,5 +1,7 @@
 """Shared pytest fixtures for async testing."""
 
+import secrets
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import event
@@ -7,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from stoa.database import Base, get_db
 from stoa.main import app
+from stoa.models import Invite
 from stoa.rate_limit import reset_limiter
 
 from .helpers import create_test_api_key
@@ -56,6 +59,24 @@ async def db():
     """Provide an async database session for direct DB tests."""
     async with TestSession() as session:
         yield session
+
+
+@pytest.fixture
+def make_invite():
+    """Factory that seeds a fresh, unused invite code and returns it.
+
+    Registration is invite-gated (issue #19), so tests that hit
+    ``/auth/register`` mint a code first: ``code = await make_invite()``.
+    """
+
+    async def _make(code: str | None = None) -> str:
+        c = code or f"test-invite-{secrets.token_hex(6)}"
+        async with TestSession() as session:
+            session.add(Invite(code=c))
+            await session.commit()
+        return c
+
+    return _make
 
 
 @pytest.fixture
