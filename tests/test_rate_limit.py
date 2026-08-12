@@ -75,9 +75,12 @@ class TestRateLimitMiddleware:
         assert response.status_code == 200
         assert "X-RateLimit-Limit" not in response.headers
 
-    async def test_admin_endpoints_rate_limited_by_admin_key(
+    async def test_admin_key_bypasses_rate_limit(
         self, client: AsyncClient, admin_headers: dict
     ) -> None:
+        """Admin-key requests are not rate-limited (operational bypass)."""
         response = await client.get("/api/admin/stats", headers=admin_headers)
         assert response.status_code == 200
-        assert "X-RateLimit-Limit" in response.headers
+        # No rate-limit headers on admin bypass
+        assert "X-RateLimit-Limit" not in response.headers
+        assert "X-RateLimit-Remaining" not in response.headers
