@@ -1,9 +1,11 @@
 # Auto-regenerate STATUS.md from live GitHub Issues on issue events.
 #
 # Runs whenever an issue is opened, closed, labeled, unlabeled, assigned,
-# or unassigned — keeping STATUS.md in sync with real issue state.
+# or unassigned. STATUS.md is published as a build artifact (status-md) on
+# each run rather than committed to main — main is protected (PR-only +
+# required checks), so a direct bot push is neither possible nor desired.
 #
-# Security: minimal permissions, pinned SHA, no secrets interpolated into shell.
+# Security: minimal permissions (read-only), pinned SHAs, no secrets in shell.
 
 name: update-status
 
@@ -13,8 +15,8 @@ on:
   workflow_dispatch:  # allow manual trigger
 
 permissions:
-  contents: write  # needed to commit STATUS.md back to the repo
-  issues: read     # needed for gh issue list
+  contents: read  # checkout only; STATUS.md is published as an artifact, not committed
+  issues: read    # needed for gh issue list
 
 concurrency:
   group: update-status-${{ github.ref }}
@@ -30,7 +32,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
-          persist-credentials: true  # needed for git push
+          persist-credentials: false  # no push; artifact-only
 
       - name: Setup Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
@@ -44,15 +46,10 @@ jobs:
           set -euo pipefail
           python scripts/update_status.py
 
-      - name: Commit if changed
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add STATUS.md
-          if git diff --cached --quiet; then
-            echo "STATUS.md unchanged, nothing to commit"
-          else
-            git commit -m "chore: regenerate STATUS.md from issue state [skip ci]"
-            git push
-          fi
+      - name: Upload STATUS.md artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: status-md
+          path: STATUS.md
+          if-no-files-found: error
+          retention-days: 30
