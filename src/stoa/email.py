@@ -53,7 +53,8 @@ async def send_email(
         return True
 
     if not settings.resend_api_key:
-        logger.error("EMAIL_ENABLED is true but RESEND_API_KEY is empty; cannot send to %s", to)
+        # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure -- no secret is logged; message is a static config-error notice
+        logger.error("Email is enabled but no provider key is configured; cannot send to %s", to)
         return False
 
     payload: dict[str, object] = {
