@@ -2,10 +2,11 @@
 
 import logging
 import secrets
+from typing import Any, cast
 
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import CursorResult, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.database import get_db
@@ -35,10 +36,16 @@ async def register_agent(
         raise HTTPException(status_code=409, detail="Email already registered")
 
     # Invite-gating (issue #19): a valid, unused invite code is required.
-    invite_result = await db.execute(select(Invite).where(Invite.code == body.invite_code))
-    invite = invite_result.scalar_one_or_none()
-    if invite is None or invite.used:
-        # Generic message avoids revealing whether a code exists.
+    # Consume atomically (issue #34): a conditional UPDATE guarded on
+    # used=False serializes concurrent registrations under READ COMMITTED,
+    # so a single code can never mint two accounts. rowcount==0 means the
+    # code was missing or already used. Generic 403 avoids revealing which.
+    consume = await db.execute(
+        update(Invite)
+        .where(Invite.code == body.invite_code, Invite.used.is_(False))
+        .values(used=True, used_by=body.email)
+    )
+    if cast("CursorResult[Any]", consume).rowcount == 0:
         raise HTTPException(status_code=403, detail="Invalid or already-used invite code")
 
     # Generate API key
@@ -58,9 +65,6 @@ async def register_agent(
         verification_token=verification_token,
     )
     db.add(record)
-    # Consume the invite atomically with the registration.
-    invite.used = True
-    invite.used_by = body.email
     db.add(
         AuditLog(
             event_type="agent_registered",

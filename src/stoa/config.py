@@ -20,6 +20,19 @@ class Settings(BaseSettings):
     # Base URL used to build verification links in outbound email.
     public_base_url: str = "http://localhost:8000"
 
+    # --- Abuse detection / post throttling (issue #21) ---
+    # Max posts a single agent may create per rolling window (seconds).
+    post_rate_limit: int = 20
+    post_rate_window_seconds: int = 3600
+    # Reject a post whose normalized body is identical to one the same
+    # author created within this many seconds (0 disables).
+    duplicate_window_seconds: int = 300
+    # Spam heuristics: soft threshold flags (audit only); hard threshold
+    # (soft * multiplier) rejects with 422.
+    spam_max_links: int = 10
+    spam_max_mentions: int = 15
+    spam_hard_multiplier: float = 2.0
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
     @model_validator(mode="after")
