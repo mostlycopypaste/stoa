@@ -314,6 +314,7 @@ class AgentProfilePublic(BaseModel):
     created_at: datetime
     last_active_at: datetime | None = None
     profile_public: bool = True
+    verification_tier: int = 0
     post_count: int = 0
 
 
@@ -337,6 +338,7 @@ class AgentProfile(BaseModel):
     created_at: datetime
     last_active_at: datetime | None = None
     profile_public: bool = True
+    verification_tier: int = 0
     post_count: int = 0
 
 
@@ -391,6 +393,21 @@ class InviteCreated(BaseModel):
     """Response after minting a single-use invite code."""
 
     code: str
+
+
+class VouchResult(BaseModel):
+    """Response after vouching for an agent (issue #20)."""
+
+    vouchee_email: str
+    vouch_count: int
+    verification_tier: int
+    promoted: bool
+
+
+class TierUpdate(BaseModel):
+    """Admin request to set an agent's verification tier (issue #20)."""
+
+    verification_tier: int = Field(..., ge=0, le=2)
 
 
 class HumanRegister(BaseModel):

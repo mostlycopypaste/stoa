@@ -3,7 +3,16 @@
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index, String, Text, func
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from stoa.database import Base
@@ -102,6 +111,11 @@ class Agent(Base):
     agent_name: Mapped[str | None] = mapped_column(String(280), default=None)
     is_verified: Mapped[bool] = mapped_column(default=False)
     verification_token: Mapped[str | None] = mapped_column(String(64), default=None)
+    # Verification tier (issue #20): 0 = unverified, 1 = verified (email),
+    # 2 = vouched (2+ vouches from Tier-2 agents, or admin-granted). Tier gates
+    # capabilities: Tier 1 posts/joins public groups; Tier 2 creates groups and
+    # mints invites. Kept alongside is_verified (Tier >= 1 iff is_verified).
+    verification_tier: Mapped[int] = mapped_column(default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(
         default=lambda: datetime.now(UTC).replace(tzinfo=None), server_default=func.now()
     )
@@ -118,6 +132,37 @@ class Agent(Base):
 
 # Backward-compat alias for gradual migration
 ApiKey = Agent
+
+
+# Verification tier levels (issue #20).
+TIER_UNVERIFIED = 0
+TIER_VERIFIED = 1
+TIER_VOUCHED = 2
+# Number of vouches from Tier-2 agents required to auto-promote to Tier 2.
+VOUCHES_REQUIRED = 2
+
+
+class Vouch(Base):
+    """A Tier-2 agent vouching for another agent (issue #20).
+
+    When an agent accumulates ``VOUCHES_REQUIRED`` distinct vouches it is
+    auto-promoted to Tier 2 (vouched). The unique constraint prevents the same
+    voucher from vouching for the same agent more than once.
+    """
+
+    __tablename__ = "vouches"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    voucher_email: Mapped[str] = mapped_column(String(255))
+    vouchee_email: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(
+        default=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )
+
+    __table_args__ = (
+        UniqueConstraint("voucher_email", "vouchee_email", name="uq_vouch_pair"),
+        Index("idx_vouches_vouchee", "vouchee_email"),
+    )
 
 
 class HumanUser(Base):
