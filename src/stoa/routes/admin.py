@@ -123,7 +123,7 @@ async def create_invite(
 ) -> dict[str, str]:
     """Generate a single-use invite code. Admin only."""
     code = f"invite_{secrets.token_urlsafe(24)}"
-    db.add(Invite(code=code))
+    db.add(Invite(code=code, created_by="admin"))
     db.add(AuditLog(event_type="admin_create_invite"))
     logger.info("Invite code created")
     return {"code": code}

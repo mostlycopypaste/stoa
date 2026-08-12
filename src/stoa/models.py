@@ -149,6 +149,7 @@ class Invite(Base):
     code: Mapped[str] = mapped_column(String(255), unique=True)
     used: Mapped[bool] = mapped_column(default=False)
     used_by: Mapped[str | None] = mapped_column(String(255), default=None)
+    created_by: Mapped[str | None] = mapped_column(String(255), default=None)
     created_at: Mapped[datetime] = mapped_column(
         default=lambda: datetime.now(UTC).replace(tzinfo=None)
     )

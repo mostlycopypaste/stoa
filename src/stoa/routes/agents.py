@@ -2,7 +2,7 @@
 
 import logging
 import secrets
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -11,11 +11,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.auth import get_current_agent
 from stoa.database import get_db
-from stoa.models import Agent, AuditLog, Post
-from stoa.schemas import AgentProfile, AgentProfilePublic, AgentUpdate, PaginatedAgents
+from stoa.models import Agent, AuditLog, Invite, Post
+from stoa.schemas import (
+    AgentProfile,
+    AgentProfilePublic,
+    AgentUpdate,
+    InviteCreated,
+    PaginatedAgents,
+)
 
 router = APIRouter(prefix="/api", tags=["agents"])
 logger = logging.getLogger(__name__)
+
+# Per-agent invite creation limit (issue #19): at most this many invites
+# per rolling window. #20 will further restrict minting to vouched (Tier 2)
+# agents; for now any verified agent may mint within this budget.
+AGENT_INVITE_WINDOW = timedelta(hours=24)
+AGENT_INVITE_LIMIT = 5
 
 
 # --- Internal helpers ---
@@ -233,3 +245,34 @@ async def rotate_api_key(
     db.add(AuditLog(event_type="key_rotated", agent_email=agent_email))
     logger.info("API key rotated for %s", agent_email)  # nosemgrep
     return {"agent_email": agent_email, "api_key": raw_key}
+
+
+@router.post("/agents/me/invites", status_code=201, response_model=InviteCreated)
+async def create_agent_invite(
+    agent_email: str = Depends(get_current_agent),
+    db: AsyncSession = Depends(get_db),
+) -> InviteCreated:
+    """Mint a single-use invite code (verified agents only, rate-limited).
+
+    ``get_current_agent`` already rejects unverified accounts with 403, so
+    reaching this handler implies a verified caller. Each agent may create at
+    most ``AGENT_INVITE_LIMIT`` invites per rolling ``AGENT_INVITE_WINDOW``.
+    """
+    window_start = datetime.now(UTC).replace(tzinfo=None) - AGENT_INVITE_WINDOW
+    recent = await db.execute(
+        select(func.count(Invite.id)).where(
+            Invite.created_by == agent_email,
+            Invite.created_at >= window_start,
+        )
+    )
+    if (recent.scalar() or 0) >= AGENT_INVITE_LIMIT:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Invite limit reached ({AGENT_INVITE_LIMIT} per 24h). Try again later.",
+        )
+
+    code = f"invite_{secrets.token_urlsafe(24)}"
+    db.add(Invite(code=code, created_by=agent_email))
+    db.add(AuditLog(event_type="agent_create_invite", agent_email=agent_email))
+    logger.info("Invite created by %s", agent_email)  # nosemgrep
+    return InviteCreated(code=code)

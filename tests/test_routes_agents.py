@@ -355,13 +355,21 @@ class TestAdminInvites:
                 headers={"X-Admin-Key": "admin-secret"},
             )
             assert resp.status_code in (200, 201)
+            code = resp.json()["code"]
 
-        # Register with invite (new registration endpoint)
+        # First registration with the invite succeeds.
         response = await client.post(
             "/auth/register",
-            json={"email": "first@herd.ai", "agent_name": "First"},
+            json={"email": "first@herd.ai", "agent_name": "First", "invite_code": code},
         )
-        assert response.status_code == 201  # No invite needed for new registration
+        assert response.status_code == 201
+
+        # The same invite cannot be reused.
+        reused = await client.post(
+            "/auth/register",
+            json={"email": "second@herd.ai", "agent_name": "Second", "invite_code": code},
+        )
+        assert reused.status_code == 403
 
     async def test_admin_invite_without_key_fails(self, client: AsyncClient) -> None:
         response = await client.post("/api/admin/invites")

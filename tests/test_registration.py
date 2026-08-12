@@ -5,11 +5,12 @@ from httpx import AsyncClient
 
 
 @pytest.mark.anyio
-async def test_register_agent(client: AsyncClient):
+async def test_register_agent(client: AsyncClient, make_invite):
     """Registration returns API key and verification token."""
+    code = await make_invite()
     resp = await client.post(
         "/auth/register",
-        json={"email": "new-agent@example.com", "agent_name": "test-agent"},
+        json={"email": "new-agent@example.com", "agent_name": "test-agent", "invite_code": code},
     )
     assert resp.status_code == 201
     data = resp.json()
@@ -20,22 +21,66 @@ async def test_register_agent(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_register_duplicate_email(client: AsyncClient):
+async def test_register_duplicate_email(client: AsyncClient, make_invite):
     """Duplicate email returns 409."""
-    payload = {"email": "dup@example.com", "agent_name": "agent-a"}
+    code = await make_invite()
+    payload = {"email": "dup@example.com", "agent_name": "agent-a", "invite_code": code}
     resp = await client.post("/auth/register", json=payload)
     assert resp.status_code == 201
 
+    # Second attempt (same email) is rejected on duplicate before invite is checked.
     resp = await client.post("/auth/register", json=payload)
     assert resp.status_code == 409
 
 
 @pytest.mark.anyio
-async def test_verify_valid_token(client: AsyncClient):
-    """Verification with valid token sets verified=true."""
+async def test_register_requires_invite_code(client: AsyncClient):
+    """Missing invite_code fails validation (422)."""
     resp = await client.post(
         "/auth/register",
-        json={"email": "verify@example.com", "agent_name": "v-agent"},
+        json={"email": "no-invite@example.com", "agent_name": "ni-agent"},
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_register_rejects_unknown_invite(client: AsyncClient):
+    """An invite code that does not exist is rejected (403)."""
+    resp = await client.post(
+        "/auth/register",
+        json={
+            "email": "bad-invite@example.com",
+            "agent_name": "bi-agent",
+            "invite_code": "does-not-exist",
+        },
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_register_rejects_reused_invite(client: AsyncClient, make_invite):
+    """A single-use invite cannot be reused (403 on second use)."""
+    code = await make_invite()
+    resp = await client.post(
+        "/auth/register",
+        json={"email": "first@example.com", "agent_name": "first", "invite_code": code},
+    )
+    assert resp.status_code == 201
+
+    resp = await client.post(
+        "/auth/register",
+        json={"email": "second@example.com", "agent_name": "second", "invite_code": code},
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_verify_valid_token(client: AsyncClient, make_invite):
+    """Verification with valid token sets verified=true."""
+    code = await make_invite()
+    resp = await client.post(
+        "/auth/register",
+        json={"email": "verify@example.com", "agent_name": "v-agent", "invite_code": code},
     )
     token = resp.json()["verification_token"]
 
@@ -52,11 +97,12 @@ async def test_verify_invalid_token(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_verify_status_before_verification(client: AsyncClient):
+async def test_verify_status_before_verification(client: AsyncClient, make_invite):
     """Pending token shows verified=false."""
+    code = await make_invite()
     resp = await client.post(
         "/auth/register",
-        json={"email": "pending@example.com", "agent_name": "p-agent"},
+        json={"email": "pending@example.com", "agent_name": "p-agent", "invite_code": code},
     )
     token = resp.json()["verification_token"]
 
@@ -66,11 +112,12 @@ async def test_verify_status_before_verification(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_verify_status_after_verification(client: AsyncClient):
+async def test_verify_status_after_verification(client: AsyncClient, make_invite):
     """Consumed token returns 404 on status check."""
+    code = await make_invite()
     resp = await client.post(
         "/auth/register",
-        json={"email": "consumed@example.com", "agent_name": "c-agent"},
+        json={"email": "consumed@example.com", "agent_name": "c-agent", "invite_code": code},
     )
     token = resp.json()["verification_token"]
 
@@ -83,11 +130,12 @@ async def test_verify_status_after_verification(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_unverified_key_returns_403(client: AsyncClient):
+async def test_unverified_key_returns_403(client: AsyncClient, make_invite):
     """Using an unverified key gets 403."""
+    code = await make_invite()
     resp = await client.post(
         "/auth/register",
-        json={"email": "unverified@example.com", "agent_name": "uv-agent"},
+        json={"email": "unverified@example.com", "agent_name": "uv-agent", "invite_code": code},
     )
     api_key = resp.json()["api_key"]
 
@@ -96,11 +144,12 @@ async def test_unverified_key_returns_403(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_verified_key_works(client: AsyncClient):
+async def test_verified_key_works(client: AsyncClient, make_invite):
     """Verify then use key — success."""
+    code = await make_invite()
     resp = await client.post(
         "/auth/register",
-        json={"email": "verified@example.com", "agent_name": "vf-agent"},
+        json={"email": "verified@example.com", "agent_name": "vf-agent", "invite_code": code},
     )
     data = resp.json()
     api_key = data["api_key"]
@@ -140,11 +189,12 @@ async def test_register_human_duplicate(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_bearer_token_auth(client: AsyncClient):
+async def test_bearer_token_auth(client: AsyncClient, make_invite):
     """Authorization: Bearer works the same as X-API-Key."""
+    code = await make_invite()
     resp = await client.post(
         "/auth/register",
-        json={"email": "bearer@example.com", "agent_name": "b-agent"},
+        json={"email": "bearer@example.com", "agent_name": "b-agent", "invite_code": code},
     )
     data = resp.json()
     api_key = data["api_key"]

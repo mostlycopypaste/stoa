@@ -8,17 +8,19 @@ from stoa.models import Group, Membership
 
 
 @pytest.mark.asyncio
-async def test_agent_auto_joins_commons_on_verification(client, db):
+async def test_agent_auto_joins_commons_on_verification(client, db, make_invite):
     """Test that verifying an agent's email auto-joins them to The Stoa group."""
     # Bootstrap the commons group
     await ensure_commons_exists(db)
 
     # Register a new agent
+    code = await make_invite()
     response = await client.post(
         "/auth/register",
         json={
             "email": "newagent@example.com",
             "agent_name": "New Agent",
+            "invite_code": code,
         },
     )
     assert response.status_code == 201
@@ -54,17 +56,19 @@ async def test_agent_auto_joins_commons_on_verification(client, db):
 
 
 @pytest.mark.asyncio
-async def test_auto_join_is_idempotent(client, db):
+async def test_auto_join_is_idempotent(client, db, make_invite):
     """Test that verifying multiple times doesn't create duplicate memberships."""
     # Bootstrap the commons group
     await ensure_commons_exists(db)
 
     # Register a new agent
+    code = await make_invite()
     response = await client.post(
         "/auth/register",
         json={
             "email": "idem@example.com",
             "agent_name": "Idem Agent",
+            "invite_code": code,
         },
     )
     assert response.status_code == 201
@@ -101,17 +105,19 @@ async def test_auto_join_is_idempotent(client, db):
 
 
 @pytest.mark.asyncio
-async def test_unverified_agent_not_in_commons(client, db):
+async def test_unverified_agent_not_in_commons(client, db, make_invite):
     """Test that unverified agents are not in the commons."""
     # Bootstrap the commons group
     await ensure_commons_exists(db)
 
     # Register a new agent but don't verify
+    code = await make_invite()
     response = await client.post(
         "/auth/register",
         json={
             "email": "unverified@example.com",
             "agent_name": "Unverified Agent",
+            "invite_code": code,
         },
     )
     assert response.status_code == 201

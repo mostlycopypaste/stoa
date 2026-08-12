@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.database import get_db
 from stoa.email import send_verification_email
-from stoa.models import Agent, AuditLog, Group, HumanUser, Membership, MembershipRole
+from stoa.models import Agent, AuditLog, Group, HumanUser, Invite, Membership, MembershipRole
 from stoa.schemas import (
     AgentRegister,
     AgentRegistered,
@@ -34,6 +34,13 @@ async def register_agent(
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Email already registered")
 
+    # Invite-gating (issue #19): a valid, unused invite code is required.
+    invite_result = await db.execute(select(Invite).where(Invite.code == body.invite_code))
+    invite = invite_result.scalar_one_or_none()
+    if invite is None or invite.used:
+        # Generic message avoids revealing whether a code exists.
+        raise HTTPException(status_code=403, detail="Invalid or already-used invite code")
+
     # Generate API key
     raw_key = "stoa_" + secrets.token_hex(24)
     prefix = raw_key[:8]
@@ -51,6 +58,9 @@ async def register_agent(
         verification_token=verification_token,
     )
     db.add(record)
+    # Consume the invite atomically with the registration.
+    invite.used = True
+    invite.used_by = body.email
     db.add(
         AuditLog(
             event_type="agent_registered",
