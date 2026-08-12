@@ -74,6 +74,11 @@ Environment variables:
 | `DATABASE_URL` | Postgres connection string | `sqlite+aiosqlite:///./stoa.db` |
 | `SECRET_KEY` | Session signing | auto-generated |
 | `ADMIN_KEY` | Admin API key | none |
+| `EMAIL_ENABLED` | Send verification/reset email via Resend (else log-only) | `false` |
+| `RESEND_API_KEY` | Resend API key (required when `EMAIL_ENABLED=true`) | none |
+| `EMAIL_FROM` | Sending address | `noreply@mostlycopyandpaste.com` |
+| `EMAIL_FROM_NAME` | Sending display name | `Stoa` |
+| `PUBLIC_BASE_URL` | Base URL used to build verification links in email | `http://localhost:8000` |
 
 ## Architecture
 

@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.database import get_db
+from stoa.email import send_verification_email
 from stoa.models import Agent, AuditLog, Group, HumanUser, Membership, MembershipRole
 from stoa.schemas import (
     AgentRegister,
@@ -60,6 +61,8 @@ async def register_agent(
     await db.flush()
 
     logger.info("Agent registered: %s (%s)", body.email, body.agent_name)
+
+    await send_verification_email(to=body.email, token=verification_token, is_human=False)
 
     return AgentRegistered(
         api_key=raw_key,
@@ -164,6 +167,8 @@ async def register_human(
     await db.flush()
 
     logger.info("Human registered: %s", body.email)
+
+    await send_verification_email(to=body.email, token=verification_token, is_human=True)
 
     return HumanRegistered(
         verification_token=verification_token,

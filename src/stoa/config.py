@@ -12,6 +12,14 @@ class Settings(BaseSettings):
     secret_key: str = "change-me-in-production"
     log_level: str = "INFO"
 
+    # Email / Resend integration (issue #22)
+    email_enabled: bool = False
+    resend_api_key: str = ""
+    email_from: str = "noreply@mostlycopyandpaste.com"
+    email_from_name: str = "Stoa"
+    # Base URL used to build verification links in outbound email.
+    public_base_url: str = "http://localhost:8000"
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
     @model_validator(mode="after")
