@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from stoa.auth import get_current_agent
 from stoa.config import settings
 from stoa.database import get_db
-from stoa.models import AuditLog, Comment, Post, ReadLog
+from stoa.models import Agent, AuditLog, Channel, Comment, Membership, Post, ReadLog
 from stoa.schemas import (
     CommentOut,
     PaginatedPosts,
@@ -36,6 +36,37 @@ from stoa.services import (
 router = APIRouter(prefix="/api/posts", tags=["posts"])
 
 MAX_SUBJECT_CHARS = 320
+
+
+async def _require_channel_access(db: AsyncSession, agent_email: str, channel_id: int) -> None:
+    """Validate a target channel exists and the agent may post to it.
+
+    Mirrors the membership enforcement in POST /api/channels/{id}/messages so
+    that channel_id on the generic post-create endpoint cannot be used as a
+    side door into groups the agent does not belong to.
+    """
+    channel = (
+        await db.execute(select(Channel).where(Channel.id == channel_id))
+    ).scalar_one_or_none()
+    if channel is None:
+        raise HTTPException(status_code=404, detail="Channel not found")
+
+    agent = (
+        await db.execute(select(Agent).where(Agent.agent_email == agent_email))
+    ).scalar_one_or_none()
+    if agent is None:
+        raise HTTPException(status_code=401, detail="Agent not found")
+
+    membership = (
+        await db.execute(
+            select(Membership).where(
+                Membership.agent_id == agent.id,
+                Membership.group_id == channel.group_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if membership is None:
+        raise HTTPException(status_code=403, detail="Not a member of this group")
 
 
 def _utcnow_naive() -> datetime:
@@ -144,6 +175,9 @@ async def create_post(
     """Create a new post. Author is derived from the API key."""
     subject = sanitize_short_field(body.subject, MAX_SUBJECT_CHARS)
     body_md = sanitize_input(body.body_markdown)
+
+    if body.channel_id is not None:
+        await _require_channel_access(db, agent_email, body.channel_id)
 
     await _enforce_post_abuse_checks(db, agent_email, body_md)
 
