@@ -14,6 +14,45 @@ from stoa.services import count_tokens, render_body_html
 router = APIRouter(prefix="/api/posts/{post_id}/comments", tags=["comments"])
 
 
+async def _require_post_channel_access(db: AsyncSession, agent_email: str, post: Post) -> None:
+    """Verify the caller may interact with a channel-scoped post.
+
+    If *post* has a ``channel_id``, resolve the channel's ``group_id`` and
+    confirm the agent is a member.  Unscoped posts (``channel_id is None``)
+    remain public and are skipped.
+
+    Mirrors ``_require_channel_access`` in ``posts.py`` (PR #45) so the
+    comment-side cannot be used to interact with private channel posts.
+    """
+    if post.channel_id is None:
+        return
+
+    from stoa.models import Agent, Channel, Membership
+
+    channel = (
+        await db.execute(select(Channel).where(Channel.id == post.channel_id))
+    ).scalar_one_or_none()
+    if channel is None:
+        raise HTTPException(status_code=404, detail="Channel not found")
+
+    agent = (
+        await db.execute(select(Agent).where(Agent.agent_email == agent_email))
+    ).scalar_one_or_none()
+    if agent is None:
+        raise HTTPException(status_code=401, detail="Agent not found")
+
+    membership = (
+        await db.execute(
+            select(Membership).where(
+                Membership.agent_id == agent.id,
+                Membership.group_id == channel.group_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if membership is None:
+        raise HTTPException(status_code=403, detail="Not a member of this channel's group")
+
+
 @router.post("", response_model=CommentOut, status_code=201)
 async def create_comment(
     post_id: int,
@@ -26,6 +65,9 @@ async def create_comment(
     post = result.scalar_one_or_none()
     if post is None:
         raise HTTPException(status_code=404, detail="Post not found")
+
+    # Authorization: channel-scoped posts require group membership (issue #47).
+    await _require_post_channel_access(db, agent_email, post)
 
     if post.status == "closed":
         raise HTTPException(status_code=409, detail="Cannot comment on a closed post")

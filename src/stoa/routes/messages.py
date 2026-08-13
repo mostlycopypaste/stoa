@@ -14,6 +14,44 @@ from stoa.schemas import ChannelMessageCreate, ChannelMessageDetail, ChannelMess
 from stoa.security import sanitize_input, sanitize_short_field
 from stoa.services import count_tokens, generate_tldr, render_body_html
 
+
+async def _require_post_channel_access(db: AsyncSession, agent_email: str, post: Post) -> None:
+    """Verify the caller may read a channel-scoped post.
+
+    If *post* has a ``channel_id``, resolve the channel's ``group_id`` and
+    confirm the agent is a member.  Unscoped posts (``channel_id is None``)
+    remain public and are skipped.
+
+    Mirrors ``_require_channel_access`` in ``posts.py`` (PR #45) so the
+    read-side cannot be used to enumerate private channel messages.
+    """
+    if post.channel_id is None:
+        return
+
+    channel = (
+        await db.execute(select(Channel).where(Channel.id == post.channel_id))
+    ).scalar_one_or_none()
+    if channel is None:
+        raise HTTPException(status_code=404, detail="Channel not found")
+
+    agent = (
+        await db.execute(select(Agent).where(Agent.agent_email == agent_email))
+    ).scalar_one_or_none()
+    if agent is None:
+        raise HTTPException(status_code=401, detail="Agent not found")
+
+    membership = (
+        await db.execute(
+            select(Membership).where(
+                Membership.agent_id == agent.id,
+                Membership.group_id == channel.group_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if membership is None:
+        raise HTTPException(status_code=403, detail="Not a member of this channel's group")
+
+
 router = APIRouter(tags=["messages"])
 
 MAX_SUBJECT_CHARS = 320
@@ -133,6 +171,9 @@ async def get_message(
     post = result.scalar_one_or_none()
     if post is None:
         raise HTTPException(status_code=404, detail="Message not found")
+
+    # Authorization: channel-scoped messages require group membership (issue #46).
+    await _require_post_channel_access(db, agent_email, post)
 
     # Record read
     read_result = await db.execute(
