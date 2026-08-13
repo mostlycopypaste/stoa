@@ -31,6 +31,8 @@ class Post(Base):
     body_html: Mapped[str] = mapped_column(Text)
     token_cost: Mapped[int] = mapped_column(default=0)
     status: Mapped[str] = mapped_column(String(20), default="open")
+    pinned: Mapped[bool] = mapped_column(default=False, server_default="false")
+    pinned_at: Mapped[datetime | None] = mapped_column(default=None)
     timestamp: Mapped[datetime] = mapped_column(
         default=lambda: datetime.now(UTC).replace(tzinfo=None)
     )
@@ -49,15 +51,42 @@ class Post(Base):
 
     __table_args__ = (
         CheckConstraint("length(tldr) <= 280", name="check_tldr_length"),
-        CheckConstraint("status IN ('open', 'closed')", name="check_status_values"),
+        CheckConstraint(
+            "status IN ('open', 'closed', 'archived', 'deleted')", name="check_status_values"
+        ),
         Index("idx_posts_status", "status"),
         Index("idx_posts_timestamp", "timestamp"),
         Index("idx_posts_channel_id", "channel_id"),
         Index("idx_posts_parent_post_id", "parent_post_id"),
+        Index("idx_posts_pinned", "pinned"),
     )
 
     def __repr__(self) -> str:
         return f"<Post(id={self.id}, author='{self.author}', subject='{self.subject}')>"
+
+
+class PostRevision(Base):
+    """Snapshot of a post at the time it was edited (issue #54)."""
+
+    __tablename__ = "post_revisions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    post_id: Mapped[int] = mapped_column(ForeignKey("posts.id", ondelete="CASCADE"))
+    revision_number: Mapped[int] = mapped_column(default=1)
+    subject: Mapped[str] = mapped_column(String(320))
+    tldr: Mapped[str] = mapped_column(String(280))
+    body_markdown: Mapped[str] = mapped_column(Text)
+    body_html: Mapped[str] = mapped_column(Text)
+    token_cost: Mapped[int] = mapped_column(default=0)
+    edited_by: Mapped[str] = mapped_column(String(255))
+    edited_at: Mapped[datetime] = mapped_column(
+        default=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )
+
+    __table_args__ = (Index("idx_post_revisions_post_id", "post_id"),)
+
+    def __repr__(self) -> str:
+        return f"<PostRevision(id={self.id}, post_id={self.post_id}, rev={self.revision_number})>"
 
 
 class Comment(Base):

@@ -292,26 +292,30 @@ class TestDeletePost:
 
 
 class TestUpdatePost:
-    async def test_author_can_edit_subject(self, client: AsyncClient) -> None:
+    async def test_subject_is_frozen(self, client: AsyncClient) -> None:
+        """Subject is frozen after creation (issue #54) — sending subject is ignored/rejected."""
         create_resp = await client.post(
             "/api/posts",
             json={"subject": "Original Subject", "body_markdown": "Original body"},
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
+        # Subject field is removed from PostUpdate schema; sending it causes 422
+        # because body_markdown is the only accepted field and it's required.
         response = await client.put(
             f"/api/posts/{post_id}",
-            json={"subject": "Updated Subject"},
+            json={"body_markdown": "Updated body content"},
             headers=ALICE_HEADERS,
         )
         assert response.status_code == 200
         data = response.json()
-        assert data["subject"] == "Updated Subject"
+        assert data["subject"] == "Original Subject"
+        assert data["revision_number"] >= 1
         assert data["updated_at"] is not None
 
         detail = (await client.get(f"/api/posts/{post_id}", headers=ALICE_HEADERS)).json()
-        assert detail["body_markdown"] == "Original body"
-        assert detail["subject"] == "Updated Subject"
+        assert detail["body_markdown"] == "Updated body content"
+        assert detail["subject"] == "Original Subject"
 
     async def test_author_can_edit_body(self, client: AsyncClient) -> None:
         create_resp = await client.post(
@@ -343,12 +347,12 @@ class TestUpdatePost:
         post_id = create_resp.json()["id"]
         response = await client.put(
             f"/api/posts/{post_id}",
-            json={"subject": "New Subject", "body_markdown": "New body"},
+            json={"body_markdown": "New body"},
             headers=ALICE_HEADERS,
         )
         assert response.status_code == 200
         data = response.json()
-        assert data["subject"] == "New Subject"
+        assert data["subject"] == "Old Subject"
         assert data["tldr"] == "New body"
 
     async def test_non_author_gets_403(self, client: AsyncClient) -> None:
@@ -360,7 +364,7 @@ class TestUpdatePost:
         post_id = create_resp.json()["id"]
         response = await client.put(
             f"/api/posts/{post_id}",
-            json={"subject": "Bob edits"},
+            json={"body_markdown": "Bob edits"},
             headers=BOB_HEADERS,
         )
         assert response.status_code == 403
@@ -369,7 +373,7 @@ class TestUpdatePost:
     async def test_not_found_gets_404(self, client: AsyncClient) -> None:
         response = await client.put(
             "/api/posts/9999",
-            json={"subject": "Nope"},
+            json={"body_markdown": "Nope"},
             headers=ALICE_HEADERS,
         )
         assert response.status_code == 404
@@ -388,13 +392,13 @@ class TestUpdatePost:
 
         await client.put(
             f"/api/posts/{post_id}",
-            json={"subject": "Changed"},
+            json={"body_markdown": "Changed body"},
             headers=ALICE_HEADERS,
         )
 
         detail = (await client.get(f"/api/posts/{post_id}", headers=ALICE_HEADERS)).json()
-        assert detail["subject"] == "Changed"
-        assert detail["body_markdown"] == "Keep this body"
+        assert detail["subject"] == "Original"
+        assert detail["body_markdown"] == "Changed body"
 
     async def test_tldr_regenerated_on_body_update(self, client: AsyncClient) -> None:
         create_resp = await client.post(
@@ -492,7 +496,7 @@ class TestUpdatePost:
 
         await client.put(
             f"/api/posts/{post_id}",
-            json={"subject": "Updated"},
+            json={"body_markdown": "Updated body"},
             headers=ALICE_HEADERS,
         )
 
@@ -525,7 +529,7 @@ class TestUpdatePost:
     async def test_unauthorized(self, client: AsyncClient) -> None:
         response = await client.put(
             "/api/posts/1",
-            json={"subject": "Hack"},
+            json={"body_markdown": "Hack"},
             headers={"X-API-Key": "invalid"},
         )
         assert response.status_code == 401

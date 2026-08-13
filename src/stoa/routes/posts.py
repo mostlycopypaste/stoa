@@ -12,13 +12,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from stoa.auth import get_current_agent
 from stoa.config import settings
 from stoa.database import get_db
-from stoa.models import Agent, AuditLog, Channel, Comment, Membership, Post, ReadLog
+from stoa.models import (
+    Agent,
+    AuditLog,
+    Channel,
+    Comment,
+    Membership,
+    Post,
+    PostRevision,
+    ReadLog,
+)
 from stoa.schemas import (
     CommentOut,
     PaginatedPosts,
     PostCreate,
     PostCreated,
     PostDetail,
+    PostManageUpdate,
+    PostRevisionOut,
     PostStatusUpdate,
     PostSummary,
     PostUpdate,
@@ -216,8 +227,12 @@ async def update_post(
     body: PostUpdate,
     agent_email: str = Depends(get_current_agent),
     db: AsyncSession = Depends(get_db),
-) -> Post:
-    """Update a post. Only the original author can edit."""
+) -> dict:  # type: ignore[type-arg]
+    """Update a post. Only the original author can edit.
+
+    Subjects are frozen after creation (issue #54). Only body_markdown
+    can be edited. A PostRevision snapshot is saved before each edit.
+    """
     result = await db.execute(select(Post).where(Post.id == post_id))
     post = result.scalar_one_or_none()
     if post is None:
@@ -225,12 +240,32 @@ async def update_post(
     if post.author != agent_email:
         raise HTTPException(status_code=403, detail="Can only edit your own posts")
 
-    if post.status == "closed":
-        raise HTTPException(status_code=409, detail="Cannot edit a closed post")
+    if post.status in ("closed", "archived", "deleted"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot edit a {post.status} post",
+        )
 
-    if body.subject is not None:
-        post.subject = sanitize_short_field(body.subject, MAX_SUBJECT_CHARS)
+    # Count existing revisions to determine next revision number
+    rev_count_result = await db.execute(
+        select(func.count(PostRevision.id)).where(PostRevision.post_id == post_id)
+    )
+    revision_number = (rev_count_result.scalar() or 0) + 1
 
+    # Save a snapshot of the CURRENT state BEFORE applying the update
+    revision = PostRevision(
+        post_id=post_id,
+        revision_number=revision_number,
+        subject=post.subject,
+        tldr=post.tldr,
+        body_markdown=post.body_markdown,
+        body_html=post.body_html,
+        token_cost=post.token_cost,
+        edited_by=agent_email,
+    )
+    db.add(revision)
+
+    # Apply the update (body only — subject is frozen)
     if body.body_markdown is not None:
         body_md = sanitize_input(body.body_markdown)
         post.body_markdown = body_md
@@ -238,20 +273,27 @@ async def update_post(
         post.tldr = generate_tldr(body_md)
         post.token_cost = count_tokens(body_md)
 
-    post.updated_at = datetime.now(UTC)
+    post.updated_at = datetime.now(UTC).replace(tzinfo=None)
 
-    details = json.dumps(redact({"post_id": post_id}))
+    details = json.dumps(redact({"post_id": post_id, "revision_number": revision_number}))
     db.add(
         AuditLog(
             event_type="post_edited",
             agent_email=agent_email,
             details=details,
-            timestamp=datetime.now(UTC),
+            timestamp=datetime.now(UTC).replace(tzinfo=None),
         )
     )
 
     await db.flush()
-    return post
+    return {
+        "id": post.id,
+        "subject": post.subject,
+        "tldr": post.tldr,
+        "token_cost": post.token_cost,
+        "updated_at": post.updated_at,
+        "revision_number": revision_number,
+    }
 
 
 @router.patch("/{post_id}/status", response_model=PostDetail)
@@ -323,6 +365,143 @@ async def update_post_status(
         "body_markdown": post.body_markdown,
         "token_cost": post.token_cost,
         "status": post.status,
+        "pinned": post.pinned,
+        "pinned_at": post.pinned_at,
+        "timestamp": post.timestamp,
+        "parent_post_id": post.parent_post_id,
+        "comments": comments,
+    }
+
+
+@router.get("/{post_id}/revisions", response_model=list[PostRevisionOut])
+async def list_post_revisions(
+    post_id: int,
+    agent_email: str = Depends(get_current_agent),
+    x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+) -> list[PostRevision]:
+    """List all revisions for a post (author or admin only). Issue #54."""
+    result = await db.execute(select(Post).where(Post.id == post_id))
+    post = result.scalar_one_or_none()
+    if post is None:
+        raise HTTPException(status_code=404, detail="Post not found")
+
+    is_author = post.author == agent_email
+    is_admin = False
+    admin_key_env = os.environ.get("ADMIN_KEY", "")
+    if admin_key_env and x_admin_key:
+        is_admin = secrets.compare_digest(x_admin_key, admin_key_env)
+
+    if not is_author and not is_admin:
+        raise HTTPException(
+            status_code=403, detail="Only the post author or admin can view revisions"
+        )
+
+    rev_result = await db.execute(
+        select(PostRevision)
+        .where(PostRevision.post_id == post_id)
+        .order_by(PostRevision.revision_number.asc())
+    )
+    return list(rev_result.scalars().all())
+
+
+@router.patch("/{post_id}/manage", response_model=PostDetail)
+async def manage_post(
+    post_id: int,
+    body: PostManageUpdate,
+    agent_email: str = Depends(get_current_agent),
+    x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:  # type: ignore[type-arg]
+    """Archive, move, or pin a post. Issue #58.
+
+    Author can: archive (set status to 'archived'), move (change channel_id).
+    Admin can: archive, move, pin/unpin, and set status to 'deleted' (soft delete).
+    """
+    result = await db.execute(select(Post).where(Post.id == post_id))
+    post = result.scalar_one_or_none()
+    if post is None:
+        raise HTTPException(status_code=404, detail="Post not found")
+
+    is_author = post.author == agent_email
+    is_admin = False
+    admin_key_env = os.environ.get("ADMIN_KEY", "")
+    if admin_key_env and x_admin_key:
+        is_admin = secrets.compare_digest(x_admin_key, admin_key_env)
+
+    if not is_author and not is_admin:
+        raise HTTPException(
+            status_code=403, detail="Only the post author or admin can manage this post"
+        )
+
+    audit_details: dict[str, object] = {"post_id": post_id}
+    actor_role = "admin" if is_admin else "author"
+
+    # --- Status change (archive / delete) ---
+    if body.status is not None:
+        # 'deleted' is admin-only
+        if body.status == "deleted" and not is_admin:
+            raise HTTPException(status_code=403, detail="Only admin can delete posts")
+        old_status = post.status
+        post.status = body.status
+        audit_details["old_status"] = old_status
+        audit_details["new_status"] = body.status
+
+    # --- Move (change channel_id) ---
+    if body.channel_id is not None:
+        # Verify destination channel exists and author has access
+        await _require_channel_access(db, agent_email, body.channel_id)
+        old_channel_id = post.channel_id
+        post.channel_id = body.channel_id
+        audit_details["old_channel_id"] = old_channel_id
+        audit_details["new_channel_id"] = body.channel_id
+
+    # --- Pin / unpin (admin only) ---
+    if body.pinned is not None:
+        if not is_admin:
+            raise HTTPException(status_code=403, detail="Only admin can pin posts")
+        if body.pinned:
+            post.pinned = True
+            post.pinned_at = datetime.now(UTC).replace(tzinfo=None)
+        else:
+            post.pinned = False
+            post.pinned_at = None
+        audit_details["pinned"] = body.pinned
+
+    audit_details["actor_role"] = actor_role
+
+    db.add(
+        AuditLog(
+            event_type="post_managed",
+            agent_email=agent_email,
+            details=json.dumps(redact(audit_details)),
+            timestamp=datetime.now(UTC).replace(tzinfo=None),
+        )
+    )
+
+    await db.flush()
+
+    # Build PostDetail response
+    comment_result = await db.execute(
+        select(Comment).where(Comment.post_id == post_id).order_by(Comment.timestamp)
+    )
+    comments = [
+        CommentOut.model_validate(c, from_attributes=True).model_copy(
+            update={"token_cost": count_tokens(str(c.body_markdown))}
+        )
+        for c in comment_result.scalars().all()
+    ]
+
+    return {
+        "id": post.id,
+        "subject": post.subject,
+        "tldr": post.tldr,
+        "author": post.author,
+        "body_markdown": post.body_markdown,
+        "token_cost": post.token_cost,
+        "status": post.status,
+        "pinned": post.pinned,
+        "pinned_at": post.pinned_at,
         "timestamp": post.timestamp,
         "parent_post_id": post.parent_post_id,
         "comments": comments,
@@ -335,11 +514,21 @@ async def list_posts(
     keyword: str | None = Query(default=None, max_length=100),
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    status: str | None = Query(default=None, max_length=20),
     agent_email: str = Depends(get_current_agent),
     db: AsyncSession = Depends(get_db),
 ) -> dict:  # type: ignore[type-arg]
     """List posts with metadata and TLDR only (no body). Minimal token cost."""
     query = select(Post)
+
+    # By default exclude archived and deleted posts.
+    # ?status=archived shows only archived. ?status=all shows everything except deleted.
+    if status == "archived":
+        query = query.where(Post.status == "archived")
+    elif status == "all":
+        query = query.where(Post.status != "deleted")
+    else:
+        query = query.where(Post.status.notin_(["archived", "deleted"]))
 
     if author:
         query = query.where(Post.author == author)
@@ -351,8 +540,12 @@ async def list_posts(
     count_result = await db.execute(select(func.count()).select_from(query.subquery()))
     total = count_result.scalar() or 0
 
-    # Fetch page
-    result = await db.execute(query.order_by(Post.timestamp.desc()).offset(offset).limit(limit))
+    # Fetch page — pinned posts first, then by recency
+    result = await db.execute(
+        query.order_by(Post.pinned.desc(), Post.pinned_at.desc(), Post.timestamp.desc())
+        .offset(offset)
+        .limit(limit)
+    )
     posts = result.scalars().all()
 
     read_post_ids: set[int] = set()
@@ -389,12 +582,19 @@ async def list_unread_posts(
 ) -> dict:  # type: ignore[type-arg]
     """List posts the requesting agent has NOT yet read."""
     read_subquery = select(ReadLog.post_id).where(ReadLog.agent_email == agent_email)
-    query = select(Post).where(Post.id.notin_(read_subquery))
+    query = select(Post).where(
+        Post.id.notin_(read_subquery),
+        Post.status.notin_(["archived", "deleted"]),
+    )
 
     count_result = await db.execute(select(func.count()).select_from(query.subquery()))
     total = count_result.scalar() or 0
 
-    result = await db.execute(query.order_by(Post.timestamp.desc()).offset(offset).limit(limit))
+    result = await db.execute(
+        query.order_by(Post.pinned.desc(), Post.pinned_at.desc(), Post.timestamp.desc())
+        .offset(offset)
+        .limit(limit)
+    )
     posts = result.scalars().all()
 
     summaries = []
@@ -422,6 +622,8 @@ async def get_post(
     result = await db.execute(select(Post).where(Post.id == post_id))
     post = result.scalar_one_or_none()
     if post is None:
+        raise HTTPException(status_code=404, detail="Post not found")
+    if post.status == "deleted":
         raise HTTPException(status_code=404, detail="Post not found")
 
     # Authorization: channel-scoped posts require group membership (issue #48).
@@ -463,6 +665,8 @@ async def get_post(
         "body_markdown": post.body_markdown,
         "token_cost": post.token_cost,
         "status": post.status,
+        "pinned": post.pinned,
+        "pinned_at": post.pinned_at,
         "timestamp": post.timestamp,
         "parent_post_id": post.parent_post_id,
         "comments": comments,
@@ -473,14 +677,22 @@ async def get_post(
 async def delete_post(
     post_id: int,
     agent_email: str = Depends(get_current_agent),
+    x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    """Delete a post. Only the original author can delete."""
+    """Soft-delete a post. Author or admin can delete. Issue #58."""
     result = await db.execute(select(Post).where(Post.id == post_id))
     post = result.scalar_one_or_none()
     if post is None:
         raise HTTPException(status_code=404, detail="Post not found")
-    if post.author != agent_email:
+
+    is_author = post.author == agent_email
+    is_admin = False
+    admin_key_env = os.environ.get("ADMIN_KEY", "")
+    if admin_key_env and x_admin_key:
+        is_admin = secrets.compare_digest(x_admin_key, admin_key_env)
+
+    if not is_author and not is_admin:
         raise HTTPException(status_code=403, detail="Can only delete your own posts")
 
     details = json.dumps(redact({"post_id": post_id}))
@@ -489,8 +701,10 @@ async def delete_post(
             event_type="post_deleted",
             agent_email=agent_email,
             details=details,
-            timestamp=datetime.now(UTC),
+            timestamp=datetime.now(UTC).replace(tzinfo=None),
         )
     )
 
-    await db.delete(post)
+    # Soft delete — set status to 'deleted' instead of removing the row
+    post.status = "deleted"
+    await db.flush()
