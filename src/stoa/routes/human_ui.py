@@ -279,7 +279,11 @@ async def channel_messages_ui(
     group_name = group.name if group else "Unknown"
 
     messages_result = await db.execute(
-        select(Post).where(Post.channel_id == channel_id).order_by(Post.timestamp.desc()).limit(50)
+        select(Post)
+        .where(Post.channel_id == channel_id)
+        .where(Post.status.notin_(["archived", "deleted"]))
+        .order_by(Post.pinned.desc(), Post.pinned_at.desc(), Post.timestamp.desc())
+        .limit(50)
     )
     messages = messages_result.scalars().all()
 

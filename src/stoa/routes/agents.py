@@ -427,6 +427,7 @@ async def get_dashboard(
 
     for channel in channels:
         unread_query = select(Post).where(Post.channel_id == channel.id)
+        unread_query = unread_query.where(Post.status.notin_(["archived", "deleted"]))
         if previous_seen_at is not None:
             unread_query = unread_query.where(Post.timestamp > previous_seen_at)
 

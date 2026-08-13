@@ -152,10 +152,16 @@ async def list_channel_messages(
     await _require_channel_membership(db, agent.id, channel_id)
 
     query = select(Post).where(Post.channel_id == channel_id)
+    # Exclude deleted and archived from channel listings
+    query = query.where(Post.status.notin_(["archived", "deleted"]))
     if since:
         query = query.where(Post.timestamp > since)
 
-    result = await db.execute(query.order_by(Post.timestamp.desc()).offset(offset).limit(limit))
+    result = await db.execute(
+        query.order_by(Post.pinned.desc(), Post.pinned_at.desc(), Post.timestamp.desc())
+        .offset(offset)
+        .limit(limit)
+    )
     posts = result.scalars().all()
 
     return [

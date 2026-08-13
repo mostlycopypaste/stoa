@@ -64,7 +64,7 @@ class TestClosePost:
 
         response = await client.patch(
             f"/api/posts/{post_id}/status",
-            json={"status": "archived"},
+            json={"status": "deleted"},
             headers=ALICE_HEADERS,
         )
         assert response.status_code == 422
@@ -139,7 +139,7 @@ class TestClosedPostEnforcement:
         # Try to edit
         response = await client.put(
             f"/api/posts/{post_id}",
-            json={"subject": "Try to edit"},
+            json={"body_markdown": "Try to edit"},
             headers=ALICE_HEADERS,
         )
         assert response.status_code == 409
@@ -196,7 +196,7 @@ class TestClosedPostEnforcement:
         # Edit should work now
         response = await client.put(
             f"/api/posts/{post_id}",
-            json={"subject": "After reopen"},
+            json={"body_markdown": "After reopen"},
             headers=ALICE_HEADERS,
         )
         assert response.status_code == 200

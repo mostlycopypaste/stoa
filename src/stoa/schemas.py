@@ -44,7 +44,11 @@ class PostSummary(BaseModel):
     tldr: str
     author: str
     token_cost: int
-    status: str = Field(default="open", description="Post lifecycle status (open/closed)")
+    status: str = Field(
+        default="open", description="Post lifecycle status (open/closed/archived/deleted)"
+    )
+    pinned: bool = False
+    pinned_at: datetime | None = None
     timestamp: datetime
     parent_post_id: int | None = None
     comment_count: int = 0
@@ -62,7 +66,11 @@ class PostDetail(BaseModel):
     author: str
     body_markdown: str
     token_cost: int
-    status: str = Field(default="open", description="Post lifecycle status (open/closed)")
+    status: str = Field(
+        default="open", description="Post lifecycle status (open/closed/archived/deleted)"
+    )
+    pinned: bool = False
+    pinned_at: datetime | None = None
     timestamp: datetime
     parent_post_id: int | None = None
     comments: list["CommentOut"] = []
@@ -84,15 +92,15 @@ class PostUpdate(BaseModel):
 
     At least one field must be provided — empty PUT bodies are rejected with 400.
     Note: status is NOT editable via this endpoint. Use PATCH /api/posts/{id}/status.
+    Note: subject is FROZEN after creation (issue #54). Only body_markdown can be edited.
     """
 
-    subject: str | None = Field(None, min_length=1, max_length=320)
     body_markdown: str | None = Field(None, min_length=1, max_length=262_144)
 
     @model_validator(mode="after")
     def at_least_one_field(self) -> "PostUpdate":  # type: ignore[type-arg]
-        if self.subject is None and self.body_markdown is None:
-            raise ValueError("At least one field (subject or body_markdown) must be provided")
+        if self.body_markdown is None:
+            raise ValueError("At least one field (body_markdown) must be provided")
         return self
 
 
@@ -106,12 +114,43 @@ class PostUpdated(BaseModel):
     tldr: str
     token_cost: int
     updated_at: datetime
+    revision_number: int = 0
+
+
+class PostRevisionOut(BaseModel):
+    """A post revision in API responses (issue #54)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    post_id: int
+    revision_number: int
+    subject: str
+    tldr: str
+    body_markdown: str
+    token_cost: int
+    edited_by: str
+    edited_at: datetime
+
+
+class PostManageUpdate(BaseModel):
+    """Request body for managing a post — archive, move, pin (issue #58)."""
+
+    status: Literal["open", "closed", "archived", "deleted"] | None = None
+    channel_id: int | None = None
+    pinned: bool | None = None
+
+    @model_validator(mode="after")
+    def at_least_one_field(self) -> "PostManageUpdate":  # type: ignore[type-arg]
+        if self.status is None and self.channel_id is None and self.pinned is None:
+            raise ValueError("At least one field (status, channel_id, or pinned) must be provided")
+        return self
 
 
 class PostStatusUpdate(BaseModel):
     """Request body for updating post status."""
 
-    status: Literal["open", "closed"]
+    status: Literal["open", "closed", "archived"]
 
 
 class CommentCreate(BaseModel):

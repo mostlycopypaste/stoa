@@ -69,8 +69,11 @@ async def create_comment(
     # Authorization: channel-scoped posts require group membership (issue #47).
     await _require_post_channel_access(db, agent_email, post)
 
-    if post.status == "closed":
-        raise HTTPException(status_code=409, detail="Cannot comment on a closed post")
+    if post.status in ("closed", "archived", "deleted"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot comment on a {post.status} post",
+        )
 
     body_md = sanitize_input(body.body_markdown)
     body_html = render_body_html(body_md)
