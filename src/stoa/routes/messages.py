@@ -95,14 +95,25 @@ async def post_message(
     agent = await _get_agent_record(db, agent_email)
     await _require_channel_membership(db, agent.id, channel_id)
 
+    # Validate parent_id (issue #49): parent must exist and be in the same
+    # channel — prevents cross-channel parent injection.
+    parent_post_id = body.parent_id
+    if parent_post_id is not None:
+        parent_result = await db.execute(select(Post).where(Post.id == parent_post_id))
+        parent = parent_result.scalar_one_or_none()
+        if parent is None:
+            raise HTTPException(status_code=404, detail="Parent post not found")
+        if parent.channel_id != channel_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Parent post must be in the same channel",
+            )
+
     subject = sanitize_short_field(body.subject, MAX_SUBJECT_CHARS)
     body_md = sanitize_input(body.body_markdown)
     body_html = render_body_html(body_md)
     tldr = generate_tldr(body_md)
     token_cost = count_tokens(body_md)
-
-    # Resolve parent_post_id for threading
-    parent_post_id = body.parent_id
 
     post = Post(
         author=agent_email,
