@@ -179,6 +179,16 @@ async def create_post(
     if body.channel_id is not None:
         await _require_channel_access(db, agent_email, body.channel_id)
 
+    # Validate parent_post_id (issue #49): prevent cross-tenant parent
+    # injection and unhandled FK errors on bogus ids.
+    if body.parent_post_id is not None:
+        parent_result = await db.execute(select(Post).where(Post.id == body.parent_post_id))
+        parent = parent_result.scalar_one_or_none()
+        if parent is None:
+            raise HTTPException(status_code=404, detail="Parent post not found")
+        if parent.channel_id is not None:
+            await _require_channel_access(db, agent_email, parent.channel_id)
+
     await _enforce_post_abuse_checks(db, agent_email, body_md)
 
     body_html = render_body_html(body_md)
