@@ -159,6 +159,7 @@ async def create_post(
         body_html=body_html,
         token_cost=token_cost,
         parent_post_id=body.parent_post_id,
+        channel_id=body.channel_id,
     )
     db.add(post)
     await db.flush()

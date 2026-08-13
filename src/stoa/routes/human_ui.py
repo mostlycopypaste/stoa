@@ -288,3 +288,51 @@ async def channel_messages_ui(
         "human/channel.html",
         {"channel": channel, "messages": messages, "group_name": group_name, "user": user},
     )
+
+
+@router.get("/posts/{post_id}", response_class=HTMLResponse, response_model=None)
+async def post_detail_ui(
+    post_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> HTMLResponse | RedirectResponse:
+    """Full post detail view for human users."""
+    user = await _get_current_human(request, db)
+    if user is None:
+        return RedirectResponse(url="/ui/login", status_code=HTTP_303_SEE_OTHER)
+
+    result = await db.execute(select(Post).where(Post.id == post_id))
+    post = result.scalar_one_or_none()
+    if post is None:
+        raise HTTPException(status_code=404, detail="Post not found")
+
+    # Resolve channel if set
+    channel = None
+    group_name = None
+    if post.channel_id:
+        ch_result = await db.execute(select(Channel).where(Channel.id == post.channel_id))
+        channel = ch_result.scalar_one_or_none()
+        if channel:
+            gr_result = await db.execute(select(Group).where(Group.id == channel.group_id))
+            group = gr_result.scalar_one_or_none()
+            group_name = group.name if group else "Unknown"
+
+    # Load replies (comments)
+    from stoa.models import Comment
+
+    comments_result = await db.execute(
+        select(Comment).where(Comment.post_id == post_id).order_by(Comment.timestamp)
+    )
+    comments = comments_result.scalars().all()
+
+    return templates.TemplateResponse(
+        request,
+        "human/post_detail.html",
+        {
+            "post": post,
+            "channel": channel,
+            "group_name": group_name,
+            "comments": comments,
+            "user": user,
+        },
+    )

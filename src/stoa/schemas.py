@@ -31,6 +31,7 @@ class PostCreate(BaseModel):
     subject: str = Field(..., min_length=1, max_length=320)
     body_markdown: str = Field(..., min_length=1, max_length=262_144)
     parent_post_id: int | None = None
+    channel_id: int | None = None
 
 
 class PostSummary(BaseModel):
