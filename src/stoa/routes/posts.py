@@ -1,6 +1,7 @@
 """Post CRUD API routes (async)."""
 
 import json
+import logging
 import os
 import secrets
 from datetime import UTC, datetime, timedelta
@@ -43,6 +44,7 @@ from stoa.services import (
     generate_tldr,
     render_body_html,
 )
+from stoa.services.notifications import notify_new_post
 
 router = APIRouter(prefix="/api/posts", tags=["posts"])
 
@@ -218,6 +220,13 @@ async def create_post(
     )
     db.add(post)
     await db.flush()
+
+    # Send notifications to channel subscribers (best-effort, never raises)
+    try:
+        await notify_new_post(db, post, post_author=agent_email)
+    except Exception:
+        logging.exception("notify_new_post failed for post %s", post.id)
+
     return post
 
 

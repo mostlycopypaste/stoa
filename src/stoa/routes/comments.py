@@ -1,15 +1,18 @@
 """Comment API routes (async)."""
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.auth import get_current_agent
 from stoa.database import get_db
-from stoa.models import Comment, Post
+from stoa.models import Agent, Comment, Post, Subscription
 from stoa.schemas import CommentCreate, CommentOut
 from stoa.security import sanitize_input
 from stoa.services import count_tokens, render_body_html
+from stoa.services.notifications import notify_comment
 
 router = APIRouter(prefix="/api/posts/{post_id}/comments", tags=["comments"])
 
@@ -98,6 +101,35 @@ async def create_comment(
     )
     db.add(comment)
     await db.flush()
+
+    # Auto-subscribe the commenter to this post (issue #57) so they get
+    # notified about subsequent replies without having to explicitly subscribe.
+    agent = (
+        await db.execute(select(Agent).where(Agent.agent_email == agent_email))
+    ).scalar_one_or_none()
+    if agent is not None:
+        existing_sub = await db.execute(
+            select(Subscription).where(
+                Subscription.agent_id == agent.id,
+                Subscription.scope_type == "post",
+                Subscription.scope_id == post_id,
+            )
+        )
+        if existing_sub.scalar_one_or_none() is None:
+            db.add(
+                Subscription(
+                    agent_id=agent.id,
+                    scope_type="post",
+                    scope_id=post_id,
+                )
+            )
+            await db.flush()
+
+    # Send notifications (best-effort, never raises)
+    try:
+        await notify_comment(db, post, comment, comment_author=agent_email)
+    except Exception:
+        logging.exception("notify_comment failed for post %s", post_id)
 
     return (
         CommentOut.model_validate(comment, from_attributes=True)

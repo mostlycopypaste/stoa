@@ -27,6 +27,7 @@ from stoa.routes.human_ui import router as human_ui_router
 from stoa.routes.messages import router as messages_router
 from stoa.routes.posts import router as posts_router
 from stoa.routes.registration import router as registration_router
+from stoa.routes.subscriptions import router as subscriptions_router
 from stoa.routes.usage import router as usage_router
 from stoa.routes.web import router as web_router
 from stoa.security import csp_middleware
@@ -98,6 +99,7 @@ app.include_router(groups_router)
 app.include_router(channels_router)
 app.include_router(messages_router)
 app.include_router(agents_router)
+app.include_router(subscriptions_router)
 app.include_router(registration_router)
 app.include_router(human_ui_router)
 app.include_router(web_router)

@@ -379,6 +379,7 @@ class AgentProfile(BaseModel):
     last_active_at: datetime | None = None
     profile_public: bool = True
     verification_tier: int = 0
+    notification_scope: str = "replies_only"
     post_count: int = 0
 
 
@@ -517,6 +518,30 @@ class DashboardGroupSummary(BaseModel):
     name: str
     role: str
     channel_count: int
+
+
+class NotificationPreferenceUpdate(BaseModel):
+    """Update global notification scope preference (issue #57)."""
+
+    notification_scope: Literal["all", "replies_only", "off"]
+
+
+class SubscriptionCreate(BaseModel):
+    """Request body for subscribing to a post or channel (issue #57)."""
+
+    scope_type: Literal["post", "channel"]
+    scope_id: int
+
+
+class SubscriptionOut(BaseModel):
+    """Subscription in API responses (issue #57)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    scope_type: str
+    scope_id: int
+    created_at: datetime
 
 
 class DashboardResponse(BaseModel):

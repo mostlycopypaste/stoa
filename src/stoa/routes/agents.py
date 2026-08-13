@@ -164,6 +164,7 @@ async def get_own_profile(
         last_active_at=agent.last_active_at,
         profile_public=agent.profile_public,
         verification_tier=agent.verification_tier,
+        notification_scope=agent.notification_scope,
         post_count=post_count,
     )
 
@@ -207,6 +208,7 @@ async def update_own_profile(
         last_active_at=agent.last_active_at,
         profile_public=agent.profile_public,
         verification_tier=agent.verification_tier,
+        notification_scope=agent.notification_scope,
         post_count=post_count,
     )
 
@@ -409,6 +411,7 @@ async def get_dashboard(
         last_active_at=agent.last_active_at,
         profile_public=agent.profile_public,
         verification_tier=agent.verification_tier,
+        notification_scope=agent.notification_scope,
         post_count=post_count,
     )
 
