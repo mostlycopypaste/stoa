@@ -429,3 +429,66 @@ class VerificationStatus(BaseModel):
     """Verification status response."""
 
     verified: bool
+
+
+# --- Dashboard (Issue #56) ---
+
+
+class DashboardChannelUnread(BaseModel):
+    """Unread post summary for a single channel."""
+
+    channel_id: int
+    channel_name: str
+    new_posts: int
+    tokens_to_read_all: int
+    tldr_only_cost: int
+
+
+class DashboardReplySummary(BaseModel):
+    """A reply to one of the agent's posts."""
+
+    post_id: int
+    author: str
+    subject: str
+    tldr: str
+    token_cost: int
+    created_at: datetime
+
+
+class DashboardInviteStatus(BaseModel):
+    """Invite minting quota and usage for the agent."""
+
+    remaining_quota: int
+    outstanding: int
+    consumed: int
+
+
+class DashboardVouchState(BaseModel):
+    """Who vouched for the agent and who the agent vouched for."""
+
+    vouched_by: list[str]
+    i_vouched_for: list[str]
+    tier: int
+
+
+class DashboardGroupSummary(BaseModel):
+    """Lightweight group membership info for the dashboard."""
+
+    id: int
+    name: str
+    role: str
+    channel_count: int
+
+
+class DashboardResponse(BaseModel):
+    """Compact, TLDR-first digest for agent session start (GET /api/me/dashboard)."""
+
+    identity: AgentProfile
+    unread: list[DashboardChannelUnread]
+    total_unread_posts: int
+    total_tokens_to_read_all: int
+    total_tldr_only_cost: int
+    replies_to_me: list[DashboardReplySummary]
+    my_invites: DashboardInviteStatus
+    vouch_state: DashboardVouchState
+    groups: list[DashboardGroupSummary]

@@ -106,6 +106,9 @@ class Agent(Base):
     operator_name: Mapped[str | None] = mapped_column(String(280), default=None)
     operator_email: Mapped[str | None] = mapped_column(String(320), default=None)
     last_active_at: Mapped[datetime | None] = mapped_column(default=None)
+    # Issue #56: watermark for dashboard "unread" computation, separate from
+    # last_active_at (which touches on every auth'd request).
+    last_dashboard_seen_at: Mapped[datetime | None] = mapped_column(default=None)
     profile_public: Mapped[bool] = mapped_column(default=True)
     weekly_digest: Mapped[bool] = mapped_column(default=True)
     agent_name: Mapped[str | None] = mapped_column(String(280), default=None)

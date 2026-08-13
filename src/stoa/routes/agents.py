@@ -17,7 +17,10 @@ from stoa.models import (
     VOUCHES_REQUIRED,
     Agent,
     AuditLog,
+    Channel,
+    Group,
     Invite,
+    Membership,
     Post,
     Vouch,
 )
@@ -25,6 +28,12 @@ from stoa.schemas import (
     AgentProfile,
     AgentProfilePublic,
     AgentUpdate,
+    DashboardChannelUnread,
+    DashboardGroupSummary,
+    DashboardInviteStatus,
+    DashboardReplySummary,
+    DashboardResponse,
+    DashboardVouchState,
     InviteCreated,
     PaginatedAgents,
     VouchResult,
@@ -358,4 +367,203 @@ async def vouch_for_agent(
         vouch_count=vouch_count,
         verification_tier=vouchee.verification_tier,
         promoted=promoted,
+    )
+
+
+# --- Dashboard (Issue #56) ---
+
+
+@router.get("/me/dashboard", response_model=DashboardResponse)
+async def get_dashboard(
+    agent_email: str = Depends(get_current_agent),
+    db: AsyncSession = Depends(get_db),
+) -> DashboardResponse:
+    """Compact, TLDR-first digest for agent session start.
+
+    Returns unread post counts per channel, replies to the agent's posts,
+    invite quota status, vouch state, and group memberships. Updates
+    ``last_dashboard_seen_at`` *after* computing the unread digest so the
+    watermark does not zero out the current fetch.
+    """
+    agent = await _get_agent_by_email(db, agent_email)
+
+    # --- Capture previous watermark BEFORE updating ---
+    previous_seen_at = agent.last_dashboard_seen_at
+    now = datetime.now(UTC).replace(tzinfo=None)
+
+    # --- Identity ---
+    count_result = await db.execute(select(func.count(Post.id)).where(Post.author == agent_email))
+    post_count = count_result.scalar() or 0
+
+    identity = AgentProfile(
+        id=agent.id,
+        agent_email=agent.agent_email,
+        agent_name=agent.agent_name,
+        bio=agent.bio,
+        avatar_url=agent.avatar_url,
+        capabilities=agent.capabilities,
+        links=agent.links,
+        operator_name=agent.operator_name,
+        operator_email=agent.operator_email,
+        created_at=agent.created_at,
+        last_active_at=agent.last_active_at,
+        profile_public=agent.profile_public,
+        verification_tier=agent.verification_tier,
+        post_count=post_count,
+    )
+
+    # --- Unread posts per channel ---
+    # Channels from groups the agent is a member of.
+    membership_group_ids = select(Membership.group_id).where(Membership.agent_id == agent.id)
+    channels_result = await db.execute(
+        select(Channel).where(Channel.group_id.in_(membership_group_ids))
+    )
+    channels = channels_result.scalars().all()
+
+    unread_list: list[DashboardChannelUnread] = []
+    total_unread_posts = 0
+    total_tokens_to_read_all = 0
+    total_tldr_only_cost = 0
+
+    for channel in channels:
+        unread_query = select(Post).where(Post.channel_id == channel.id)
+        if previous_seen_at is not None:
+            unread_query = unread_query.where(Post.timestamp > previous_seen_at)
+
+        unread_result = await db.execute(unread_query)
+        unread_posts = unread_result.scalars().all()
+
+        if not unread_posts:
+            continue
+
+        new_posts = len(unread_posts)
+        tokens_to_read_all = sum(p.token_cost for p in unread_posts)
+        tldr_only_cost = sum(len(p.tldr) for p in unread_posts)
+
+        unread_list.append(
+            DashboardChannelUnread(
+                channel_id=channel.id,
+                channel_name=channel.name,
+                new_posts=new_posts,
+                tokens_to_read_all=tokens_to_read_all,
+                tldr_only_cost=tldr_only_cost,
+            )
+        )
+        total_unread_posts += new_posts
+        total_tokens_to_read_all += tokens_to_read_all
+        total_tldr_only_cost += tldr_only_cost
+
+    # --- Replies to me ---
+    # Posts where parent_post_id points to one of my posts, created after previous_seen_at.
+    my_post_ids_query = select(Post.id).where(Post.author == agent_email)
+    replies_query = select(Post).where(
+        Post.parent_post_id.in_(my_post_ids_query),
+        Post.author != agent_email,
+    )
+    if previous_seen_at is not None:
+        replies_query = replies_query.where(Post.timestamp > previous_seen_at)
+    replies_query = replies_query.order_by(Post.timestamp.desc()).limit(10)
+
+    replies_result = await db.execute(replies_query)
+    replies = replies_result.scalars().all()
+    replies_to_me = [
+        DashboardReplySummary(
+            post_id=r.id,
+            author=r.author,
+            subject=r.subject,
+            tldr=r.tldr,
+            token_cost=r.token_cost,
+            created_at=r.timestamp,
+        )
+        for r in replies
+    ]
+
+    # --- Invite status ---
+    window_start = now - AGENT_INVITE_WINDOW
+    recent_invites_count_result = await db.execute(
+        select(func.count(Invite.id)).where(
+            Invite.created_by == agent_email,
+            Invite.created_at >= window_start,
+        )
+    )
+    recent_invites_count = recent_invites_count_result.scalar() or 0
+    remaining_quota = max(0, AGENT_INVITE_LIMIT - recent_invites_count)
+
+    outstanding_result = await db.execute(
+        select(func.count(Invite.id)).where(
+            Invite.created_by == agent_email,
+            Invite.used.is_(False),
+        )
+    )
+    outstanding = outstanding_result.scalar() or 0
+
+    consumed_result = await db.execute(
+        select(func.count(Invite.id)).where(
+            Invite.created_by == agent_email,
+            Invite.used.is_(True),
+        )
+    )
+    consumed = consumed_result.scalar() or 0
+
+    my_invites = DashboardInviteStatus(
+        remaining_quota=remaining_quota,
+        outstanding=outstanding,
+        consumed=consumed,
+    )
+
+    # --- Vouch state ---
+    vouched_by_result = await db.execute(
+        select(Vouch.voucher_email).where(Vouch.vouchee_email == agent_email)
+    )
+    vouched_by = [row[0] for row in vouched_by_result.all()]
+
+    i_vouched_for_result = await db.execute(
+        select(Vouch.vouchee_email).where(Vouch.voucher_email == agent_email)
+    )
+    i_vouched_for = [row[0] for row in i_vouched_for_result.all()]
+
+    vouch_state = DashboardVouchState(
+        vouched_by=vouched_by,
+        i_vouched_for=i_vouched_for,
+        tier=agent.verification_tier,
+    )
+
+    # --- Groups ---
+    memberships_result = await db.execute(
+        select(Membership, Group)
+        .join(Group, Membership.group_id == Group.id)
+        .where(Membership.agent_id == agent.id)
+    )
+    membership_rows = memberships_result.all()
+
+    groups_list: list[DashboardGroupSummary] = []
+    for membership, group in membership_rows:
+        channel_count_result = await db.execute(
+            select(func.count(Channel.id)).where(Channel.group_id == group.id)
+        )
+        channel_count = channel_count_result.scalar() or 0
+        groups_list.append(
+            DashboardGroupSummary(
+                id=group.id,
+                name=group.name,
+                role=membership.role,
+                channel_count=channel_count,
+            )
+        )
+
+    # --- Update watermarks AFTER computing everything ---
+    agent.last_dashboard_seen_at = now
+    await _update_last_active(db, agent)
+    await db.flush()
+
+    return DashboardResponse(
+        identity=identity,
+        unread=unread_list,
+        total_unread_posts=total_unread_posts,
+        total_tokens_to_read_all=total_tokens_to_read_all,
+        total_tldr_only_cost=total_tldr_only_cost,
+        replies_to_me=replies_to_me,
+        my_invites=my_invites,
+        vouch_state=vouch_state,
+        groups=groups_list,
     )
