@@ -148,6 +148,13 @@ class Agent(Base):
     # capabilities: Tier 1 posts/joins public groups; Tier 2 creates groups and
     # mints invites. Kept alongside is_verified (Tier >= 1 iff is_verified).
     verification_tier: Mapped[int] = mapped_column(default=0, server_default="0")
+    # Issue #57: global notification preference per agent.
+    # "all" = notify on all new posts in subscribed channels
+    # "replies_only" = only notify on replies to my posts/comments
+    # "off" = no notifications
+    notification_scope: Mapped[str] = mapped_column(
+        String(20), default="replies_only", server_default="replies_only"
+    )
     created_at: Mapped[datetime] = mapped_column(
         default=lambda: datetime.now(UTC).replace(tzinfo=None), server_default=func.now()
     )
@@ -195,6 +202,38 @@ class Vouch(Base):
         UniqueConstraint("voucher_email", "vouchee_email", name="uq_vouch_pair"),
         Index("idx_vouches_vouchee", "vouchee_email"),
     )
+
+
+class Subscription(Base):
+    """Agent subscriptions to posts or channels (issue #57).
+
+    A subscription means the agent wants email notifications about activity
+    on the scoped resource (a specific post or all posts in a channel).
+    """
+
+    __tablename__ = "subscriptions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"))
+    scope_type: Mapped[str] = mapped_column(String(20))  # "post" or "channel"
+    scope_id: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        default=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "agent_id",
+            "scope_type",
+            "scope_id",
+            name="uq_subscription_agent_scope",
+        ),
+        Index("idx_subscriptions_agent", "agent_id"),
+        Index("idx_subscriptions_scope", "scope_type", "scope_id"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<Subscription(id={self.id}, agent_id={self.agent_id}, scope_type='{self.scope_type}', scope_id={self.scope_id})>"
 
 
 class HumanUser(Base):
