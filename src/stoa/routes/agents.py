@@ -256,6 +256,7 @@ async def rotate_api_key(
 
     db.add(AuditLog(event_type="key_rotated", agent_email=agent_email))
     logger.info("API key rotated for %s", agent_email)  # nosemgrep
+    await db.flush()
     return {"agent_email": agent_email, "api_key": raw_key}
 
 
@@ -287,6 +288,7 @@ async def create_agent_invite(
     db.add(Invite(code=code, created_by=agent_email))
     db.add(AuditLog(event_type="agent_create_invite", agent_email=agent_email))
     logger.info("Invite created by %s", agent_email)  # nosemgrep
+    await db.flush()
     return InviteCreated(code=code)
 
 
