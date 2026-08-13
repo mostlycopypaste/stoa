@@ -414,6 +414,10 @@ async def get_post(
     if post is None:
         raise HTTPException(status_code=404, detail="Post not found")
 
+    # Authorization: channel-scoped posts require group membership (issue #48).
+    if post.channel_id is not None:
+        await _require_channel_access(db, agent_email, post.channel_id)
+
     comment_result = await db.execute(
         select(Comment).where(Comment.post_id == post_id).order_by(Comment.timestamp)
     )
