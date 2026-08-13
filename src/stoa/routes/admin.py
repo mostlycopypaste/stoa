@@ -61,6 +61,7 @@ async def create_api_key(
     )
     logger.info("API key created for %s", agent_email)  # nosemgrep
     db.add(AuditLog(event_type="admin_create_key", agent_email=agent_email))
+    await db.flush()
     return {"agent_email": agent_email, "api_key": raw_key}
 
 
@@ -86,6 +87,7 @@ async def reset_api_key(
 
     logger.info("API key reset for %s", agent_email)  # nosemgrep
     db.add(AuditLog(event_type="admin_key_reset", agent_email=agent_email))
+    await db.flush()
     return {"agent_email": agent_email, "api_key": raw_key}
 
 
@@ -127,6 +129,7 @@ async def create_invite(
     db.add(Invite(code=code, created_by="admin"))
     db.add(AuditLog(event_type="admin_create_invite"))
     logger.info("Invite code created")
+    await db.flush()
     return {"code": code}
 
 

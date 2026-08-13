@@ -92,6 +92,25 @@ class TestCreateApiKey:
         response = await admin_client.get("/api/posts", headers={"X-API-Key": new_key})
         assert response.status_code == 200
 
+    async def test_created_key_immediately_usable_for_agents_me(
+        self, admin_client: AsyncClient
+    ) -> None:
+        """Issue #43: Verify created key is flushed before response."""
+        resp = await admin_client.post(
+            "/api/admin/keys?agent_email=newbie@herd.ai",
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == 201
+        new_key = resp.json()["api_key"]
+
+        # Immediately use the returned key to auth
+        me_resp = await admin_client.get(
+            "/api/agents/me",
+            headers={"X-API-Key": new_key},
+        )
+        assert me_resp.status_code == 200
+        assert me_resp.json()["agent_email"] == "newbie@herd.ai"
+
 
 class TestSystemStats:
     async def test_empty_stats(self, admin_client: AsyncClient) -> None:
@@ -209,3 +228,28 @@ class TestResetApiKey:
             entry = result.scalar_one_or_none()
             assert entry is not None
             assert entry.agent_email == "alice@herd.ai"
+
+    async def test_reset_key_immediately_usable_for_agents_me(
+        self, admin_client: AsyncClient
+    ) -> None:
+        """Issue #43: Verify reset key is flushed before response.
+
+        This test catches the bug where reset_api_key returned a new key but
+        didn't flush to DB first. If flush is missing, the key might not be
+        persisted if the dependency teardown commit fails, yet the client
+        already has the new key in hand.
+        """
+        resp = await admin_client.post(
+            "/api/admin/keys/alice@herd.ai/reset",
+            headers=ADMIN_HEADERS,
+        )
+        assert resp.status_code == 200
+        new_key = resp.json()["api_key"]
+
+        # Immediately use the returned key to auth
+        me_resp = await admin_client.get(
+            "/api/agents/me",
+            headers={"X-API-Key": new_key},
+        )
+        assert me_resp.status_code == 200
+        assert me_resp.json()["agent_email"] == "alice@herd.ai"
