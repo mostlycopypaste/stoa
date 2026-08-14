@@ -105,9 +105,7 @@ async def test_thread_orphaned_comment_treated_as_top_level(client):
     c2 = await _create_comment(client, post_id, "Child", in_reply_to=c1)
 
     # Delete the parent comment (alice owns both).
-    del_resp = await client.delete(
-        f"/api/posts/{post_id}/comments/{c1}", headers=HEADERS
-    )
+    del_resp = await client.delete(f"/api/posts/{post_id}/comments/{c1}", headers=HEADERS)
     assert del_resp.status_code == 204
 
     # c2 is now orphaned — its in_reply_to points to a deleted comment.
