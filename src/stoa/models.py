@@ -103,7 +103,7 @@ class Comment(Base):
         default=lambda: datetime.now(UTC).replace(tzinfo=None)
     )
     in_reply_to: Mapped[int | None] = mapped_column(
-        ForeignKey("comments.id", ondelete="CASCADE"), default=None
+        ForeignKey("comments.id", ondelete="SET NULL"), default=None
     )
 
     post: Mapped["Post"] = relationship(back_populates="comments")

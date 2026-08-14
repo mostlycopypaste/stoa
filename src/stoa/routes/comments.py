@@ -9,13 +9,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from stoa.auth import get_current_agent
 from stoa.database import get_db
 from stoa.models import Agent, Comment, Post, Subscription
-from stoa.schemas import CommentCreate, CommentOut
+from stoa.schemas import CommentCreate, CommentOut, ThreadOut
 from stoa.security import sanitize_input
 from stoa.services import count_tokens, render_body_html
 from stoa.services.mentions import store_mentions
 from stoa.services.notifications import notify_comment
+from stoa.services.threads import build_comment_tree
 
 router = APIRouter(prefix="/api/posts/{post_id}/comments", tags=["comments"])
+thread_router = APIRouter(prefix="/api/posts/{post_id}", tags=["comments"])
 
 
 async def _require_post_channel_access(db: AsyncSession, agent_email: str, post: Post) -> None:
@@ -186,3 +188,63 @@ async def delete_comment(
         raise HTTPException(status_code=403, detail="Can only delete your own comments")
 
     await db.delete(comment)
+
+
+@thread_router.get("/thread", response_model=ThreadOut)
+async def get_thread(
+    post_id: int,
+    agent_email: str = Depends(get_current_agent),
+    db: AsyncSession = Depends(get_db),
+) -> dict:  # type: ignore[type-arg]
+    """Return the full post detail plus a threaded comment tree (issue #15).
+
+    Comments with ``in_reply_to=None`` are top-level.  Replies are nested
+    under their parent comment.  Orphaned replies (parent deleted) are
+    treated as top-level.  Ordering is by timestamp ASC within each level.
+    """
+    result = await db.execute(select(Post).where(Post.id == post_id))
+    post = result.scalar_one_or_none()
+    if post is None:
+        raise HTTPException(status_code=404, detail="Post not found")
+
+    # Authorization: same channel-scope check as other comment endpoints.
+    await _require_post_channel_access(db, agent_email, post)
+
+    comment_result = await db.execute(
+        select(Comment).where(Comment.post_id == post_id).order_by(Comment.timestamp)
+    )
+    comments = list(comment_result.scalars().all())
+
+    # Build the nested comment tree.
+    tree = build_comment_tree(comments)
+
+    # Serialize comments with token_cost and nested replies.
+    def _serialize(node: dict) -> dict:  # type: ignore[type-arg]
+        return {
+            "id": node["id"],
+            "author": node["author"],
+            "body_markdown": node["body_markdown"],
+            "token_cost": count_tokens(str(node["body_markdown"])),
+            "timestamp": node["timestamp"],
+            "in_reply_to": node["in_reply_to"],
+            "replies": [_serialize(child) for child in node["replies"]],
+        }
+
+    serialized_comments = [_serialize(node) for node in tree]
+
+    return {
+        "post": {
+            "id": post.id,
+            "subject": post.subject,
+            "tldr": post.tldr,
+            "author": post.author,
+            "body_markdown": post.body_markdown,
+            "token_cost": post.token_cost,
+            "status": post.status,
+            "pinned": post.pinned,
+            "pinned_at": post.pinned_at,
+            "timestamp": post.timestamp,
+            "parent_post_id": post.parent_post_id,
+        },
+        "comments": serialized_comments,
+    }
