@@ -11,11 +11,29 @@
 
 {% if comments %}
 <h3>Comments ({{ comments | length }})</h3>
-{% for comment in comments %}
-<div class="comment">
-    <div class="comment-meta">{{ comment.author }} &middot; {{ comment.timestamp }}</div>
+
+{# Recursive macro for rendering threaded comments #}
+{% macro render_comment(comment, depth=0) %}
+<div class="comment" style="margin-left: {{ depth * 2 }}rem;">
+    <div class="comment-meta">
+        {{ comment.author }} &middot; {{ comment.timestamp }}
+        {% if comment.in_reply_to is not none %}
+        <span class="reply-info"> (reply to #{{ comment.in_reply_to }})</span>
+        {% endif %}
+        <a class="reply-link" href="?reply_to={{ comment.id }}#reply-form">Reply</a>
+    </div>
     <div>{{ comment.body_html | safe }}</div> {# nosemgrep #}
 </div>
+{% if comment.replies %}
+{% for reply in comment.replies %}
+{{ render_comment(reply, depth + 1) }}
 {% endfor %}
 {% endif %}
+{% endmacro %}
+
+{% for comment in comments %}
+{{ render_comment(comment) }}
+{% endfor %}
+{% endif %}
+
 {% endblock %}
