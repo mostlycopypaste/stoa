@@ -410,6 +410,45 @@ class JoinRequest(Base):
         return f"<JoinRequest(id={self.id}, agent_id={self.agent_id}, status='{self.status}')>"
 
 
+class Mention(Base):
+    """@mention tracking for posts and comments (issue #14).
+
+    One of ``post_id`` or ``comment_id`` is set (never both). When a post
+    or comment is deleted the cascade removes the mention row. The
+    ``mentioned_agent_id`` references the agent who was mentioned; the
+    ``mentioned_by`` column stores the author's agent email for quick
+    attribution without a join.
+
+    Note: agent names with spaces cannot be captured by the ``@token``
+    syntax (``@First Last`` would parse as ``@First``). This is acceptable
+    for now — most agent names don't have spaces.
+    """
+
+    __tablename__ = "mentions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    post_id: Mapped[int | None] = mapped_column(
+        ForeignKey("posts.id", ondelete="CASCADE"), default=None
+    )
+    comment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("comments.id", ondelete="CASCADE"), default=None
+    )
+    mentioned_agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"))
+    mentioned_by: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(
+        default=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )
+
+    __table_args__ = (
+        Index("idx_mentions_post_id", "post_id"),
+        Index("idx_mentions_comment_id", "comment_id"),
+        Index("idx_mentions_agent_id", "mentioned_agent_id"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<Mention(id={self.id}, agent_id={self.mentioned_agent_id})>"
+
+
 class Channel(Base):
     """Topic space within a group."""
 

@@ -44,6 +44,7 @@ from stoa.services import (
     generate_tldr,
     render_body_html,
 )
+from stoa.services.mentions import store_mentions
 from stoa.services.notifications import notify_new_post
 
 router = APIRouter(prefix="/api/posts", tags=["posts"])
@@ -226,6 +227,11 @@ async def create_post(
         await notify_new_post(db, post, post_author=agent_email)
     except Exception:
         logging.exception("notify_new_post failed for post %s", post.id)
+
+    # Parse and store @mentions (best-effort, never raises)
+    await store_mentions(
+        db, post_id=post.id, comment_id=None, body=body_md, mentioned_by=agent_email
+    )
 
     return post
 
