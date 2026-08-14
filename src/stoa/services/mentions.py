@@ -57,10 +57,10 @@ async def parse_mentions(body: str, db: AsyncSession) -> list[int]:
     # Map lowercased name -> agent and lowercased email -> agent.
     name_map: dict[str, Agent] = {}
     email_map: dict[str, Agent] = {}
-    for agent in agents:
-        if agent.agent_name:
-            name_map[agent.agent_name.lower()] = agent
-        email_map[agent.agent_email.lower()] = agent
+    for ag in agents:
+        if ag.agent_name:
+            name_map[ag.agent_name.lower()] = ag
+        email_map[ag.agent_email.lower()] = ag
 
     resolved_ids: list[int] = []
     resolved_set: set[int] = set()
