@@ -67,7 +67,7 @@ async def parse_mentions(body: str, db: AsyncSession) -> list[int]:
     for token in unique_tokens:
         lower = token.lower()
         # 1) Try name match first.
-        agent = name_map.get(lower)
+        agent: Agent | None = name_map.get(lower)
         # 2) Fall back to email match.
         if agent is None:
             agent = email_map.get(lower)

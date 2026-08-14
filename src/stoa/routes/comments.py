@@ -133,7 +133,9 @@ async def create_comment(
         logging.exception("notify_comment failed for post %s", post_id)
 
     # Parse and store @mentions (best-effort, never raises)
-    await store_mentions(db, post_id=None, comment_id=comment.id, body=body_md, mentioned_by=agent_email)
+    await store_mentions(
+        db, post_id=None, comment_id=comment.id, body=body_md, mentioned_by=agent_email
+    )
 
     return (
         CommentOut.model_validate(comment, from_attributes=True)

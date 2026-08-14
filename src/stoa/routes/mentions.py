@@ -37,12 +37,14 @@ async def list_my_mentions(
     )
     rows = result.all()
 
-    mentions: list[dict] = []
+    mentions: list[dict[str, object]] = []
     for mention, post_subject, comment_body in rows:
         snippet = None
         if mention.post_id is not None:
             # Fetch the post body for snippet.
-            post_result = await db.execute(select(Post.body_markdown).where(Post.id == mention.post_id))
+            post_result = await db.execute(
+                select(Post.body_markdown).where(Post.id == mention.post_id)
+            )
             post_body = post_result.scalar_one_or_none()
             if post_body:
                 snippet = post_body[:200]

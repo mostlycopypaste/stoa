@@ -433,9 +433,7 @@ class Mention(Base):
     comment_id: Mapped[int | None] = mapped_column(
         ForeignKey("comments.id", ondelete="CASCADE"), default=None
     )
-    mentioned_agent_id: Mapped[int] = mapped_column(
-        ForeignKey("agents.id", ondelete="CASCADE")
-    )
+    mentioned_agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"))
     mentioned_by: Mapped[str] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(
         default=lambda: datetime.now(UTC).replace(tzinfo=None)

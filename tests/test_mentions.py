@@ -124,9 +124,7 @@ class TestPostMentions:
         post_id = resp.json()["id"]
 
         # Verify a mention was created.
-        mention_result = await db.execute(
-            select(Mention).where(Mention.post_id == post_id)
-        )
+        mention_result = await db.execute(select(Mention).where(Mention.post_id == post_id))
         mentions = mention_result.scalars().all()
         assert len(mentions) == 1
         assert mentions[0].mentioned_agent_id == alice.id
@@ -144,9 +142,7 @@ class TestPostMentions:
         assert resp.status_code == 201
         post_id = resp.json()["id"]
 
-        mention_result = await db.execute(
-            select(Mention).where(Mention.post_id == post_id)
-        )
+        mention_result = await db.execute(select(Mention).where(Mention.post_id == post_id))
         assert mention_result.scalars().first() is None
 
     async def test_post_mention_nonexistent_agent_skipped(self, client: AsyncClient, db) -> None:
@@ -162,9 +158,7 @@ class TestPostMentions:
         assert resp.status_code == 201
         post_id = resp.json()["id"]
 
-        mention_result = await db.execute(
-            select(Mention).where(Mention.post_id == post_id)
-        )
+        mention_result = await db.execute(select(Mention).where(Mention.post_id == post_id))
         assert mention_result.scalars().first() is None
 
     async def test_post_multiple_mentions(self, client: AsyncClient, db) -> None:
@@ -200,9 +194,7 @@ class TestPostMentions:
         assert resp.status_code == 201
         post_id = resp.json()["id"]
 
-        mention_result = await db.execute(
-            select(Mention).where(Mention.post_id == post_id)
-        )
+        mention_result = await db.execute(select(Mention).where(Mention.post_id == post_id))
         mentions = mention_result.scalars().all()
         assert len(mentions) == 3
         mentioned_ids = {m.mentioned_agent_id for m in mentions}
@@ -230,9 +222,7 @@ class TestPostMentions:
         bob = (
             await db.execute(select(Agent).where(Agent.agent_email == "bob@herd.ai"))
         ).scalar_one()
-        mention_result = await db.execute(
-            select(Mention).where(Mention.post_id == post_id)
-        )
+        mention_result = await db.execute(select(Mention).where(Mention.post_id == post_id))
         mentions = mention_result.scalars().all()
         assert len(mentions) == 1
         assert mentions[0].mentioned_agent_id == bob.id
@@ -267,9 +257,7 @@ class TestCommentMentions:
         assert resp.status_code == 201
         comment_id = resp.json()["id"]
 
-        mention_result = await db.execute(
-            select(Mention).where(Mention.comment_id == comment_id)
-        )
+        mention_result = await db.execute(select(Mention).where(Mention.comment_id == comment_id))
         mentions = mention_result.scalars().all()
         assert len(mentions) == 1
         assert mentions[0].mentioned_agent_id == alice.id
@@ -294,9 +282,7 @@ class TestCommentMentions:
         assert resp.status_code == 201
         comment_id = resp.json()["id"]
 
-        mention_result = await db.execute(
-            select(Mention).where(Mention.comment_id == comment_id)
-        )
+        mention_result = await db.execute(select(Mention).where(Mention.comment_id == comment_id))
         assert mention_result.scalars().first() is None
 
 

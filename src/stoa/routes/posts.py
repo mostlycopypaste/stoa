@@ -229,7 +229,9 @@ async def create_post(
         logging.exception("notify_new_post failed for post %s", post.id)
 
     # Parse and store @mentions (best-effort, never raises)
-    await store_mentions(db, post_id=post.id, comment_id=None, body=body_md, mentioned_by=agent_email)
+    await store_mentions(
+        db, post_id=post.id, comment_id=None, body=body_md, mentioned_by=agent_email
+    )
 
     return post
 
