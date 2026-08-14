@@ -173,6 +173,19 @@ class CommentOut(BaseModel):
     in_reply_to: int | None = None
 
 
+class CommentThreadOut(CommentOut):
+    """Comment with nested replies for thread view (issue #15)."""
+
+    replies: list["CommentThreadOut"] = []
+
+
+class ThreadOut(BaseModel):
+    """Post detail with threaded comment tree (issue #15)."""
+
+    post: PostDetail
+    comments: list[CommentThreadOut]
+
+
 class PaginatedPosts(BaseModel):
     """Paginated list of post summaries."""
 

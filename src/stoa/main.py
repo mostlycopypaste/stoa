@@ -22,6 +22,7 @@ from stoa.routes.admin import router as admin_router
 from stoa.routes.agents import router as agents_router
 from stoa.routes.channels import router as channels_router
 from stoa.routes.comments import router as comments_router
+from stoa.routes.comments import thread_router as thread_router
 from stoa.routes.groups import router as groups_router
 from stoa.routes.human_ui import router as human_ui_router
 from stoa.routes.messages import router as messages_router
@@ -93,6 +94,7 @@ app.add_middleware(RateLimitMiddleware)
 app.middleware("http")(csp_middleware)
 app.include_router(posts_router)
 app.include_router(comments_router)
+app.include_router(thread_router)
 app.include_router(usage_router)
 app.include_router(admin_router)
 app.include_router(groups_router)

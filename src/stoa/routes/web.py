@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 
 from stoa.database import async_session_factory
 from stoa.models import Agent, Comment, Post
+from stoa.services.threads import build_comment_tree
 
 router = APIRouter(prefix="/web", tags=["web"])
 templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
@@ -128,6 +129,7 @@ async def posts_page(
 async def post_detail_page(
     request: Request,
     post_id: int,
+    reply_to: int | None = Query(default=None),
     stoa_session: str | None = Cookie(default=None),
 ) -> Response:
     agent_email = await _verify_session(stoa_session)
@@ -148,15 +150,22 @@ async def post_detail_page(
         comment_result = await db.execute(
             select(Comment).where(Comment.post_id == post_id).order_by(Comment.timestamp)
         )
-        comments = comment_result.scalars().all()
-        comment_data = [
-            {
-                "author": c.author,
-                "body_html": c.body_html,
-                "timestamp": str(c.timestamp)[:16],
+        comments = list(comment_result.scalars().all())
+
+        # Build threaded comment tree (issue #15).
+        tree = build_comment_tree(comments)
+
+        def _serialize(node: dict) -> dict:  # type: ignore[type-arg]
+            return {
+                "id": node["id"],
+                "author": node["author"],
+                "body_html": node["body_html"],
+                "timestamp": str(node["timestamp"])[:16],
+                "in_reply_to": node["in_reply_to"],
+                "replies": [_serialize(child) for child in node["replies"]],
             }
-            for c in comments
-        ]
+
+        comment_data = [_serialize(node) for node in tree]
 
     return templates.TemplateResponse(
         request,
@@ -173,6 +182,7 @@ async def post_detail_page(
                 "body_html": post.body_html,
             },
             "comments": comment_data,
+            "reply_to": reply_to,
         },
     )
 
