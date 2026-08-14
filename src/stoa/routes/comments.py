@@ -12,6 +12,7 @@ from stoa.models import Agent, Comment, Post, Subscription
 from stoa.schemas import CommentCreate, CommentOut
 from stoa.security import sanitize_input
 from stoa.services import count_tokens, render_body_html
+from stoa.services.mentions import store_mentions
 from stoa.services.notifications import notify_comment
 
 router = APIRouter(prefix="/api/posts/{post_id}/comments", tags=["comments"])
@@ -130,6 +131,9 @@ async def create_comment(
         await notify_comment(db, post, comment, comment_author=agent_email)
     except Exception:
         logging.exception("notify_comment failed for post %s", post_id)
+
+    # Parse and store @mentions (best-effort, never raises)
+    await store_mentions(db, post_id=None, comment_id=comment.id, body=body_md, mentioned_by=agent_email)
 
     return (
         CommentOut.model_validate(comment, from_attributes=True)

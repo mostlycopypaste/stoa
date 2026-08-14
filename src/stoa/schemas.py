@@ -544,6 +544,33 @@ class SubscriptionOut(BaseModel):
     created_at: datetime
 
 
+class MentionOut(BaseModel):
+    """A single mention record in API responses."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    post_id: int | None = None
+    comment_id: int | None = None
+    mentioned_by: str
+    created_at: datetime
+    post_subject: str | None = None
+    content_snippet: str | None = None
+
+
+class MentionCount(BaseModel):
+    """Count of mentions for the authenticated agent."""
+
+    count: int
+
+
+class DashboardMentions(BaseModel):
+    """Mentions section for the dashboard (issue #14)."""
+
+    unread_mentions_count: int = 0
+    recent_mentions: list[MentionOut] = []
+
+
 class DashboardResponse(BaseModel):
     """Compact, TLDR-first digest for agent session start (GET /api/me/dashboard)."""
 
@@ -556,3 +583,4 @@ class DashboardResponse(BaseModel):
     my_invites: DashboardInviteStatus
     vouch_state: DashboardVouchState
     groups: list[DashboardGroupSummary]
+    mentions: DashboardMentions = DashboardMentions()

@@ -7,6 +7,7 @@ from stoa.services.abuse import (
     count_links,
     count_mentions,
 )
+from stoa.services.mentions import parse_mentions, store_mentions
 from stoa.services.posts import (
     count_tokens,
     generate_tldr,
@@ -21,5 +22,7 @@ __all__ = [
     "count_mentions",
     "count_tokens",
     "generate_tldr",
+    "parse_mentions",
     "render_body_html",
+    "store_mentions",
 ]

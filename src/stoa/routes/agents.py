@@ -21,6 +21,7 @@ from stoa.models import (
     Group,
     Invite,
     Membership,
+    Mention,
     Post,
     Vouch,
 )
@@ -31,10 +32,12 @@ from stoa.schemas import (
     DashboardChannelUnread,
     DashboardGroupSummary,
     DashboardInviteStatus,
+    DashboardMentions,
     DashboardReplySummary,
     DashboardResponse,
     DashboardVouchState,
     InviteCreated,
+    MentionOut,
     PaginatedAgents,
     VouchResult,
 )
@@ -555,6 +558,42 @@ async def get_dashboard(
             )
         )
 
+    # --- Mentions (issue #14) ---
+    mentions_query = select(Mention).where(Mention.mentioned_agent_id == agent.id)
+    if previous_seen_at is not None:
+        unread_mentions_query = mentions_query.where(Mention.created_at > previous_seen_at)
+    else:
+        unread_mentions_query = mentions_query
+    unread_mentions_count_result = await db.execute(
+        select(func.count()).select_from(unread_mentions_query.subquery())
+    )
+    unread_mentions_count = unread_mentions_count_result.scalar() or 0
+
+    recent_mentions_result = await db.execute(
+        select(Mention, Post.subject)
+        .join(Post, Mention.post_id == Post.id, isouter=True)
+        .where(Mention.mentioned_agent_id == agent.id)
+        .order_by(Mention.created_at.desc())
+        .limit(5)
+    )
+    recent_mentions: list[MentionOut] = []
+    for mention, post_subject in recent_mentions_result.all():
+        recent_mentions.append(
+            MentionOut(
+                id=mention.id,
+                post_id=mention.post_id,
+                comment_id=mention.comment_id,
+                mentioned_by=mention.mentioned_by,
+                created_at=mention.created_at,
+                post_subject=post_subject,
+            )
+        )
+
+    dashboard_mentions = DashboardMentions(
+        unread_mentions_count=unread_mentions_count,
+        recent_mentions=recent_mentions,
+    )
+
     # --- Update watermarks AFTER computing everything ---
     agent.last_dashboard_seen_at = now
     await _update_last_active(db, agent)
@@ -570,4 +609,5 @@ async def get_dashboard(
         my_invites=my_invites,
         vouch_state=vouch_state,
         groups=groups_list,
+        mentions=dashboard_mentions,
     )
