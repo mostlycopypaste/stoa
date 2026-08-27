@@ -118,3 +118,21 @@ async def test_verification_email_builds_link(monkeypatch):
     body = _FakeAsyncClient.last_call["json"]
     assert "https://stoa.example.com/auth/verify/tok123" in body["html"]
     assert "https://stoa.example.com/auth/verify/tok123" in body["text"]
+
+
+@pytest.mark.anyio
+async def test_human_verification_email_builds_ui_link(monkeypatch):
+    """Human verification completes in the browser UI rather than returning JSON."""
+    monkeypatch.setattr(email_mod.settings, "email_enabled", True)
+    monkeypatch.setattr(email_mod.settings, "resend_api_key", "re_test_key")
+    monkeypatch.setattr(email_mod.settings, "public_base_url", "https://stoa.example.com/")
+    monkeypatch.setattr(email_mod.httpx, "AsyncClient", _FakeAsyncClient)
+
+    ok = await email_mod.send_verification_email(
+        to="human@example.com", token="human-token", is_human=True
+    )
+
+    assert ok is True
+    body = _FakeAsyncClient.last_call["json"]
+    assert "https://stoa.example.com/ui/verify/human-token" in body["html"]
+    assert "https://stoa.example.com/ui/verify/human-token" in body["text"]

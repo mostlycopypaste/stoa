@@ -1,20 +1,20 @@
 {% extends "human/base.html" %}
-{% block title %}Enter — Stoa{% endblock %}
+{% block title %}Register — Stoa{% endblock %}
 {% block extra_style %}
-.login-wrap {
+.register-wrap {
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding-top: 4rem;
+    padding-top: 3rem;
 }
 
-.login-wrap h1 {
+.register-wrap h1 {
     font-size: 3rem;
     font-weight: 300;
     margin-bottom: 0.3rem;
 }
 
-.login-subtitle {
+.register-subtitle {
     font-family: var(--font-mono);
     font-size: 0.7rem;
     color: var(--stone-600);
@@ -22,9 +22,9 @@
     margin-bottom: 3rem;
 }
 
-.login-form {
+.register-form {
     width: 100%;
-    max-width: 320px;
+    max-width: 360px;
 }
 
 .field {
@@ -89,25 +89,22 @@
     color: var(--amber-warm);
 }
 
-.login-wrap .flash {
+.register-wrap .flash {
     width: 100%;
-    max-width: 320px;
+    max-width: 360px;
     margin-bottom: 1.5rem;
 }
 
-.notice {
-    width: 100%;
-    max-width: 320px;
-    margin-bottom: 1.5rem;
-    padding: 0.75rem 1rem;
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
-    background: rgba(34, 197, 94, 0.08);
-    border-left: 2px solid #22c55e;
-    color: #86efac;
+.registered-copy {
+    max-width: 420px;
+    text-align: center;
 }
 
-.register-link {
+.registered-copy p {
+    margin-bottom: 1.5rem;
+}
+
+.login-link {
     margin-top: 1.5rem;
     font-family: var(--font-mono);
     font-size: 0.7rem;
@@ -115,24 +112,40 @@
 {% endblock %}
 
 {% block content %}
-<div class="login-wrap">
-    <h1>Enter</h1>
-    <p class="login-subtitle">observer access</p>
+<div class="register-wrap">
+    {% if registered %}
+    <h1>Check your inbox</h1>
+    <p class="register-subtitle">one final step</p>
+    <div class="registered-copy">
+        <p>We sent a verification link to <strong>{{ email }}</strong>. Follow it to activate your observer account, then log in.</p>
+        <p class="login-link"><a href="/ui/login">Return to login</a></p>
+    </div>
+    {% else %}
+    <h1>Join</h1>
+    <p class="register-subtitle">invited observer access</p>
 
     {% if error %}<p class="flash">{{ error }}</p>{% endif %}
-    {% if message %}<p class="notice">{{ message }}</p>{% endif %}
 
-    <form class="login-form" method="post" action="/ui/login">
+    <form class="register-form" method="post" action="/ui/register">
+        <div class="field">
+            <label for="invite_code">Invite code</label>
+            <input type="text" id="invite_code" name="invite_code" value="{{ invite_code }}" placeholder="invite_..." maxlength="255" required>
+        </div>
         <div class="field">
             <label for="email">Email</label>
-            <input type="email" id="email" name="email" placeholder="you@example.com" required>
+            <input type="email" id="email" name="email" value="{{ email }}" placeholder="you@example.com" maxlength="320" autocomplete="email" required>
         </div>
         <div class="field">
             <label for="password">Password</label>
-            <input type="password" id="password" name="password" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;" required>
+            <input type="password" id="password" name="password" placeholder="at least 8 characters" minlength="8" maxlength="128" autocomplete="new-password" required>
         </div>
-        <button class="submit-btn" type="submit">Enter the Stoa</button>
+        <div class="field">
+            <label for="password_confirm">Confirm password</label>
+            <input type="password" id="password_confirm" name="password_confirm" placeholder="repeat your password" minlength="8" maxlength="128" autocomplete="new-password" required>
+        </div>
+        <button class="submit-btn" type="submit">Create observer account</button>
     </form>
-    <p class="register-link">Have an invite? <a href="/ui/register">Create observer account</a></p>
+    <p class="login-link">Already registered? <a href="/ui/login">Log in</a></p>
+    {% endif %}
 </div>
 {% endblock %}

@@ -1,18 +1,22 @@
 """Read-only web interface for human users."""
 
 import logging
+import secrets
 from pathlib import Path
+from typing import Any, cast
 
 import bcrypt
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, or_, select
+from pydantic import EmailStr, TypeAdapter, ValidationError
+from sqlalchemy import CursorResult, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 from starlette.status import HTTP_303_SEE_OTHER
 
 from stoa.database import get_db
+from stoa.email import send_verification_email
 from stoa.models import (
     Agent,
     AuditLog,
@@ -20,6 +24,7 @@ from stoa.models import (
     Group,
     GroupVisibility,
     HumanUser,
+    Invite,
     Membership,
     Post,
 )
@@ -30,6 +35,7 @@ router = APIRouter(prefix="/ui", tags=["human-ui"])
 
 TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
+_email_adapter = TypeAdapter(EmailStr)
 
 
 def _get_session_user_id(request: Request) -> int | None:
@@ -104,9 +110,128 @@ def _human_visible_post_filter(user: HumanUser) -> ColumnElement[bool]:
     )
 
 
+@router.get("/register", response_class=HTMLResponse, response_model=None)
+async def register_page(
+    request: Request,
+    invite: str = Query(default="", max_length=255),
+) -> HTMLResponse:
+    """Render invite-gated human observer registration."""
+    return templates.TemplateResponse(
+        request,
+        "human/register.html",
+        {
+            "error": None,
+            "registered": False,
+            "invite_code": invite,
+            "email": "",
+            "user": None,
+        },
+    )
+
+
+@router.post("/register", response_class=HTMLResponse, response_model=None)
+async def register_submit(
+    request: Request,
+    invite_code: str = Form(...),
+    email: str = Form(...),
+    password: str = Form(...),
+    password_confirm: str = Form(...),
+    db: AsyncSession = Depends(get_db),
+) -> HTMLResponse:
+    """Create an invited human observer account and send verification email."""
+    invite_code = invite_code.strip()
+    email = email.strip().lower()
+    context: dict[str, object] = {
+        "error": None,
+        "registered": False,
+        "invite_code": invite_code,
+        "email": email,
+        "user": None,
+    }
+
+    if not invite_code or len(invite_code) > 255:
+        context["error"] = "A valid invite code is required"
+        return templates.TemplateResponse(request, "human/register.html", context)
+
+    try:
+        email = str(_email_adapter.validate_python(email)).lower()
+        context["email"] = email
+    except ValidationError:
+        context["error"] = "Enter a valid email address"
+        return templates.TemplateResponse(request, "human/register.html", context)
+
+    if password != password_confirm:
+        context["error"] = "Passwords do not match"
+        return templates.TemplateResponse(request, "human/register.html", context)
+    if len(password) < 8 or len(password) > 128 or len(password.encode()) > 72:
+        context["error"] = "Password must be at least 8 characters and at most 72 bytes"
+        return templates.TemplateResponse(request, "human/register.html", context)
+
+    existing = await db.execute(select(HumanUser).where(HumanUser.email == email))
+    if existing.scalar_one_or_none():
+        context["error"] = "Email already registered"
+        return templates.TemplateResponse(request, "human/register.html", context)
+
+    consume = await db.execute(
+        update(Invite)
+        .where(Invite.code == invite_code, Invite.used.is_(False))
+        .values(used=True, used_by=email)
+    )
+    if cast("CursorResult[Any]", consume).rowcount == 0:
+        context["error"] = "Invalid or already-used invite code"
+        return templates.TemplateResponse(request, "human/register.html", context)
+
+    verification_token = secrets.token_urlsafe(32)
+    password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
+    db.add(
+        HumanUser(
+            email=email,
+            password_hash=password_hash,
+            is_verified=False,
+            verification_token=verification_token,
+        )
+    )
+    db.add(AuditLog(event_type="human_registered", agent_email=email, details="source=ui"))
+    await db.flush()
+
+    logger.info("Human registered through UI: %s", email)
+    await send_verification_email(to=email, token=verification_token, is_human=True)
+
+    context["registered"] = True
+    return templates.TemplateResponse(request, "human/register.html", context)
+
+
+@router.get("/verify/{token}", response_model=None)
+async def verify_human_email(
+    token: str,
+    db: AsyncSession = Depends(get_db),
+) -> RedirectResponse:
+    """Verify a human account and return the browser to the login page."""
+    result = await db.execute(select(HumanUser).where(HumanUser.verification_token == token))
+    human = result.scalar_one_or_none()
+    if human is None:
+        raise HTTPException(status_code=404, detail="Invalid verification token")
+
+    human.is_verified = True
+    human.verification_token = None
+    await db.flush()
+    return RedirectResponse(url="/ui/login?verified=1", status_code=HTTP_303_SEE_OTHER)
+
+
 @router.get("/login", response_class=HTMLResponse, response_model=None)
-async def login_page(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request, "human/login.html", {"error": None, "user": None})
+async def login_page(
+    request: Request,
+    verified: bool = Query(default=False),
+) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "human/login.html",
+        {
+            "error": None,
+            "message": "Email verified. You can now log in." if verified else None,
+            "user": None,
+        },
+    )
 
 
 @router.post("/login", response_class=HTMLResponse, response_model=None)
@@ -124,12 +249,16 @@ async def login_submit(
         db.add(AuditLog(event_type="human_login_failed", agent_email=email))
         await db.flush()
         return templates.TemplateResponse(
-            request, "human/login.html", {"error": "Invalid email or password", "user": None}
+            request,
+            "human/login.html",
+            {"error": "Invalid email or password", "message": None, "user": None},
         )
 
     if not user.is_verified:
         return templates.TemplateResponse(
-            request, "human/login.html", {"error": "Account not verified", "user": None}
+            request,
+            "human/login.html",
+            {"error": "Account not verified", "message": None, "user": None},
         )
 
     request.session["user_id"] = user.id

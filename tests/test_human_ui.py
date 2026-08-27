@@ -3,9 +3,10 @@
 import bcrypt
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from stoa.models import Agent, Channel, Group, GroupVisibility, HumanUser, Membership, Post
+from stoa.models import Agent, Channel, Group, GroupVisibility, HumanUser, Invite, Membership, Post
 
 
 async def _create_verified_human(
@@ -36,6 +37,132 @@ async def _login(
     """Log in and return the client (cookies are stored on the client)."""
     response = await client.post("/ui/login", data={"email": email, "password": password})
     return response
+
+
+@pytest.mark.asyncio
+async def test_register_page_accepts_invite_query_parameter(client: AsyncClient):
+    """GET /ui/register pre-fills an invite supplied by an emailed link."""
+    response = await client.get("/ui/register?invite=invite_7G60Z6R")
+
+    assert response.status_code == 200
+    assert 'action="/ui/register"' in response.text
+    assert 'name="invite_code"' in response.text
+    assert 'value="invite_7G60Z6R"' in response.text
+    assert 'name="email"' in response.text
+    assert 'name="password"' in response.text
+    assert 'name="password_confirm"' in response.text
+
+
+@pytest.mark.asyncio
+async def test_register_page_escapes_invite_query_parameter(client: AsyncClient):
+    """Invite values are escaped before being rendered into the HTML form."""
+    response = await client.get("/ui/register", params={"invite": '"><script>alert(1)</script>'})
+
+    assert response.status_code == 200
+    assert "<script>" not in response.text
+    assert "&lt;script&gt;" in response.text
+
+
+@pytest.mark.asyncio
+async def test_register_human_consumes_invite(client: AsyncClient, db: AsyncSession, make_invite):
+    """A valid invite creates an unverified observer account and is single-use."""
+    invite_code = await make_invite("invite_ui_registration")
+
+    response = await client.post(
+        "/ui/register",
+        data={
+            "invite_code": invite_code,
+            "email": "new-human@example.com",
+            "password": "securepass123",
+            "password_confirm": "securepass123",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Check your inbox" in response.text
+    human_result = await db.execute(
+        select(HumanUser).where(HumanUser.email == "new-human@example.com")
+    )
+    human = human_result.scalar_one()
+    assert human.is_verified is False
+    assert human.verification_token
+    invite_result = await db.execute(select(Invite).where(Invite.code == invite_code))
+    invite = invite_result.scalar_one()
+    assert invite.used is True
+    assert invite.used_by == "new-human@example.com"
+
+
+@pytest.mark.asyncio
+async def test_register_human_rejects_invalid_invite(client: AsyncClient, db: AsyncSession):
+    """An unknown invite does not create a human account."""
+    response = await client.post(
+        "/ui/register",
+        data={
+            "invite_code": "invite_missing",
+            "email": "not-created@example.com",
+            "password": "securepass123",
+            "password_confirm": "securepass123",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Invalid or already-used invite code" in response.text
+    result = await db.execute(select(HumanUser).where(HumanUser.email == "not-created@example.com"))
+    assert result.scalar_one_or_none() is None
+
+
+@pytest.mark.asyncio
+async def test_register_human_validation_does_not_consume_invite(
+    client: AsyncClient, db: AsyncSession, make_invite
+):
+    """Form validation completes before the single-use invite is consumed."""
+    invite_code = await make_invite("invite_keep_on_validation_error")
+
+    response = await client.post(
+        "/ui/register",
+        data={
+            "invite_code": invite_code,
+            "email": "new-human@example.com",
+            "password": "securepass123",
+            "password_confirm": "differentpass123",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Passwords do not match" in response.text
+    invite_result = await db.execute(select(Invite).where(Invite.code == invite_code))
+    assert invite_result.scalar_one().used is False
+
+
+@pytest.mark.asyncio
+async def test_register_verify_and_login_flow(client: AsyncClient, db: AsyncSession, make_invite):
+    """The browser flow takes an invited human through verification to login."""
+    invite_code = await make_invite("invite_complete_human_flow")
+    await client.post(
+        "/ui/register",
+        data={
+            "invite_code": invite_code,
+            "email": "flow@example.com",
+            "password": "securepass123",
+            "password_confirm": "securepass123",
+        },
+    )
+    human_result = await db.execute(select(HumanUser).where(HumanUser.email == "flow@example.com"))
+    token = human_result.scalar_one().verification_token
+
+    verify_response = await client.get(f"/ui/verify/{token}", follow_redirects=False)
+
+    assert verify_response.status_code == 303
+    assert verify_response.headers["location"] == "/ui/login?verified=1"
+    login_page = await client.get(verify_response.headers["location"])
+    assert "Email verified" in login_page.text
+    login_response = await client.post(
+        "/ui/login",
+        data={"email": "flow@example.com", "password": "securepass123"},
+        follow_redirects=False,
+    )
+    assert login_response.status_code == 303
+    assert login_response.headers["location"] == "/ui/groups"
 
 
 @pytest.mark.asyncio
