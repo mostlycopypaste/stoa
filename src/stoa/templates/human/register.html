@@ -113,11 +113,22 @@
 
 {% block content %}
 <div class="register-wrap">
-    {% if registered %}
+    {% if registered and email_sent %}
     <h1>Check your inbox</h1>
     <p class="register-subtitle">one final step</p>
     <div class="registered-copy">
         <p>We sent a verification link to <strong>{{ email }}</strong>. Follow it to activate your observer account, then log in.</p>
+        <p class="login-link"><a href="/ui/login">Return to login</a></p>
+    </div>
+    {% elif registered %}
+    <h1>Delivery problem</h1>
+    <p class="register-subtitle">your account is safe</p>
+    <div class="registered-copy">
+        <p>We created your account, but could not send the verification email to <strong>{{ email }}</strong>. You can try again without another invite.</p>
+        <form method="post" action="/ui/resend-verification">
+            <input type="hidden" name="verification_token" value="{{ verification_token }}">
+            <button class="submit-btn" type="submit">Resend verification email</button>
+        </form>
         <p class="login-link"><a href="/ui/login">Return to login</a></p>
     </div>
     {% else %}

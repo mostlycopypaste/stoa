@@ -19,6 +19,7 @@ from stoa.schemas import (
     HumanRegistered,
     VerificationStatus,
 )
+from stoa.services.human_registration import HumanRegistrationError, create_human_account
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
@@ -160,34 +161,30 @@ async def register_human(
     db: AsyncSession = Depends(get_db),
 ) -> HumanRegistered:
     """Register a human observer account."""
-    # Check for duplicate email
-    existing = await db.execute(select(HumanUser).where(HumanUser.email == body.email))
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="Email already registered")
-
-    password_hash = bcrypt.hashpw(body.password.encode(), bcrypt.gensalt(rounds=12)).decode()
-    verification_token = secrets.token_urlsafe(32)
-
-    record = HumanUser(
-        email=body.email,
-        password_hash=password_hash,
-        is_verified=False,
-        verification_token=verification_token,
-    )
-    db.add(record)
-    db.add(
-        AuditLog(
-            event_type="human_registered",
-            agent_email=body.email,
+    try:
+        record, verification_token = await create_human_account(
+            email=body.email,
+            password=body.password,
+            invite_code=body.invite_code,
+            source="api",
+            db=db,
         )
+    except HumanRegistrationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+    logger.info("Human registered: %s", record.email)
+    email_sent = await send_verification_email(
+        to=record.email,
+        token=verification_token,
+        is_human=True,
     )
-    await db.flush()
-
-    logger.info("Human registered: %s", body.email)
-
-    await send_verification_email(to=body.email, token=verification_token, is_human=True)
+    message = (
+        "Account created. Verify your email to activate."
+        if email_sent
+        else "Account created, but the verification email could not be sent. Use the token to verify."
+    )
 
     return HumanRegistered(
         verification_token=verification_token,
-        message="Account created. Verify your email to activate.",
+        message=message,
     )

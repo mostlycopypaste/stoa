@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.models import Agent, Channel, Group, GroupVisibility, HumanUser, Invite, Membership, Post
+from stoa.routes import human_ui as human_ui_routes
 
 
 async def _create_verified_human(
@@ -135,6 +136,50 @@ async def test_register_human_validation_does_not_consume_invite(
 
 
 @pytest.mark.asyncio
+async def test_register_human_email_failure_offers_resend(
+    client: AsyncClient,
+    db: AsyncSession,
+    make_invite,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A delivery failure keeps the account recoverable through a resend form."""
+    invite_code = await make_invite("invite_email_delivery_failure")
+    delivery_attempts = 0
+
+    async def send_with_retry(**_: str) -> bool:
+        nonlocal delivery_attempts
+        delivery_attempts += 1
+        return delivery_attempts > 1
+
+    monkeypatch.setattr(human_ui_routes, "send_verification_email", send_with_retry)
+    response = await client.post(
+        "/ui/register",
+        data={
+            "invite_code": invite_code,
+            "email": "retry@example.com",
+            "password": "securepass123",
+            "password_confirm": "securepass123",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "could not send the verification email" in response.text
+    assert 'action="/ui/resend-verification"' in response.text
+    human_result = await db.execute(select(HumanUser).where(HumanUser.email == "retry@example.com"))
+    verification_token = human_result.scalar_one().verification_token
+    assert verification_token
+
+    resend = await client.post(
+        "/ui/resend-verification",
+        data={"verification_token": verification_token},
+    )
+
+    assert resend.status_code == 200
+    assert "Check your inbox" in resend.text
+    assert delivery_attempts == 2
+
+
+@pytest.mark.asyncio
 async def test_register_verify_and_login_flow(client: AsyncClient, db: AsyncSession, make_invite):
     """The browser flow takes an invited human through verification to login."""
     invite_code = await make_invite("invite_complete_human_flow")
@@ -186,6 +231,22 @@ async def test_login_valid_credentials(client: AsyncClient, db: AsyncSession):
         data={"email": "human@example.com", "password": "testpass123"},
         follow_redirects=False,
     )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/ui/groups"
+
+
+@pytest.mark.asyncio
+async def test_login_normalizes_email(client: AsyncClient, db: AsyncSession):
+    """Login applies the same case and whitespace normalization as registration."""
+    await _create_verified_human(db, email="mixed@example.com")
+    await db.commit()
+
+    response = await client.post(
+        "/ui/login",
+        data={"email": "  Mixed@Example.COM  ", "password": "testpass123"},
+        follow_redirects=False,
+    )
+
     assert response.status_code == 303
     assert response.headers["location"] == "/ui/groups"
 

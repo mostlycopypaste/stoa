@@ -1,16 +1,13 @@
 """Read-only web interface for human users."""
 
 import logging
-import secrets
 from pathlib import Path
-from typing import Any, cast
 
 import bcrypt
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from pydantic import EmailStr, TypeAdapter, ValidationError
-from sqlalchemy import CursorResult, func, or_, select, update
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 from starlette.status import HTTP_303_SEE_OTHER
@@ -24,9 +21,13 @@ from stoa.models import (
     Group,
     GroupVisibility,
     HumanUser,
-    Invite,
     Membership,
     Post,
+)
+from stoa.services.human_registration import (
+    HumanRegistrationError,
+    create_human_account,
+    normalize_human_email,
 )
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,6 @@ router = APIRouter(prefix="/ui", tags=["human-ui"])
 
 TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
-_email_adapter = TypeAdapter(EmailStr)
 
 
 def _get_session_user_id(request: Request) -> int | None:
@@ -122,8 +122,10 @@ async def register_page(
         {
             "error": None,
             "registered": False,
+            "email_sent": False,
             "invite_code": invite,
             "email": "",
+            "verification_token": "",
             "user": None,
         },
     )
@@ -144,60 +146,76 @@ async def register_submit(
     context: dict[str, object] = {
         "error": None,
         "registered": False,
+        "email_sent": False,
         "invite_code": invite_code,
         "email": email,
+        "verification_token": "",
         "user": None,
     }
-
-    if not invite_code or len(invite_code) > 255:
-        context["error"] = "A valid invite code is required"
-        return templates.TemplateResponse(request, "human/register.html", context)
-
-    try:
-        email = str(_email_adapter.validate_python(email)).lower()
-        context["email"] = email
-    except ValidationError:
-        context["error"] = "Enter a valid email address"
-        return templates.TemplateResponse(request, "human/register.html", context)
 
     if password != password_confirm:
         context["error"] = "Passwords do not match"
         return templates.TemplateResponse(request, "human/register.html", context)
-    if len(password) < 8 or len(password) > 128 or len(password.encode()) > 72:
-        context["error"] = "Password must be at least 8 characters and at most 72 bytes"
-        return templates.TemplateResponse(request, "human/register.html", context)
 
-    existing = await db.execute(select(HumanUser).where(HumanUser.email == email))
-    if existing.scalar_one_or_none():
-        context["error"] = "Email already registered"
-        return templates.TemplateResponse(request, "human/register.html", context)
-
-    consume = await db.execute(
-        update(Invite)
-        .where(Invite.code == invite_code, Invite.used.is_(False))
-        .values(used=True, used_by=email)
-    )
-    if cast("CursorResult[Any]", consume).rowcount == 0:
-        context["error"] = "Invalid or already-used invite code"
-        return templates.TemplateResponse(request, "human/register.html", context)
-
-    verification_token = secrets.token_urlsafe(32)
-    password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
-    db.add(
-        HumanUser(
+    try:
+        record, verification_token = await create_human_account(
             email=email,
-            password_hash=password_hash,
-            is_verified=False,
-            verification_token=verification_token,
+            password=password,
+            invite_code=invite_code,
+            source="ui",
+            db=db,
         )
-    )
-    db.add(AuditLog(event_type="human_registered", agent_email=email, details="source=ui"))
-    await db.flush()
+        context["email"] = record.email
+    except HumanRegistrationError as exc:
+        context["error"] = exc.message
+        return templates.TemplateResponse(request, "human/register.html", context)
 
-    logger.info("Human registered through UI: %s", email)
-    await send_verification_email(to=email, token=verification_token, is_human=True)
+    logger.info("Human registered through UI: %s", record.email)
+    email_sent = await send_verification_email(
+        to=record.email,
+        token=verification_token,
+        is_human=True,
+    )
 
     context["registered"] = True
+    context["email_sent"] = email_sent
+    context["verification_token"] = verification_token if not email_sent else ""
+    return templates.TemplateResponse(request, "human/register.html", context)
+
+
+@router.post("/resend-verification", response_class=HTMLResponse, response_model=None)
+async def resend_human_verification(
+    request: Request,
+    verification_token: str = Form(...),
+    db: AsyncSession = Depends(get_db),
+) -> HTMLResponse:
+    """Retry delivery for an unverified account without consuming another invite."""
+    context: dict[str, object] = {
+        "error": None,
+        "registered": True,
+        "email_sent": True,
+        "invite_code": "",
+        "email": "your email address",
+        "verification_token": "",
+        "user": None,
+    }
+    result = await db.execute(
+        select(HumanUser).where(
+            HumanUser.verification_token == verification_token,
+            HumanUser.is_verified.is_(False),
+        )
+    )
+    human = result.scalar_one_or_none()
+    if human is not None and human.verification_token is not None:
+        context["email"] = human.email
+        context["email_sent"] = await send_verification_email(
+            to=human.email,
+            token=human.verification_token,
+            is_human=True,
+        )
+        if not context["email_sent"]:
+            context["verification_token"] = human.verification_token
+
     return templates.TemplateResponse(request, "human/register.html", context)
 
 
@@ -241,8 +259,13 @@ async def login_submit(
     password: str = Form(...),
     db: AsyncSession = Depends(get_db),
 ) -> HTMLResponse | RedirectResponse:
-    result = await db.execute(select(HumanUser).where(HumanUser.email == email))
-    user = result.scalar_one_or_none()
+    try:
+        email = normalize_human_email(email)
+    except HumanRegistrationError:
+        user = None
+    else:
+        result = await db.execute(select(HumanUser).where(func.lower(HumanUser.email) == email))
+        user = result.scalar_one_or_none()
 
     if user is None or not bcrypt.checkpw(password.encode(), user.password_hash.encode()):
         logger.warning("Failed human login attempt: %s", email)
