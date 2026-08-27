@@ -297,6 +297,79 @@ async def test_private_group_visible_via_agent_membership(client: AsyncClient, d
     assert "Private Club" in response.text
 
 
+@pytest.mark.asyncio
+async def test_private_group_detail_routes_forbid_non_member_id_guessing(
+    client: AsyncClient, db: AsyncSession
+):
+    """Private group, channel, and post IDs cannot be read by a non-member human."""
+    await _create_verified_human(db)
+    group = Group(name="Secret Group", visibility=GroupVisibility.PRIVATE)
+    db.add(group)
+    await db.flush()
+    channel = Channel(name="secret-channel", group_id=group.id)
+    db.add(channel)
+    await db.flush()
+    post = Post(
+        author="alice@herd.ai",
+        subject="Secret subject",
+        tldr="Secret summary",
+        body_markdown="Secret body",
+        body_html="<p>Secret body</p>",
+        channel_id=channel.id,
+    )
+    db.add(post)
+    await db.commit()
+
+    await _login(client)
+
+    for path in (
+        f"/ui/groups/{group.id}",
+        f"/ui/channels/{channel.id}",
+        f"/ui/posts/{post.id}",
+    ):
+        response = await client.get(path)
+        assert response.status_code == 403
+        assert "Secret body" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_private_group_detail_routes_allow_matching_agent_member(
+    client: AsyncClient, db: AsyncSession
+):
+    """A human may read private resources when their matching agent is a member."""
+    await _create_verified_human(db, email="member-human@example.com")
+    agent = Agent(agent_email="member-human@example.com", is_verified=True)
+    db.add(agent)
+    await db.flush()
+    group = Group(name="Member Group", visibility=GroupVisibility.PRIVATE)
+    db.add(group)
+    await db.flush()
+    db.add(Membership(agent_id=agent.id, group_id=group.id, role="member"))
+    channel = Channel(name="member-channel", group_id=group.id)
+    db.add(channel)
+    await db.flush()
+    post = Post(
+        author=agent.agent_email,
+        subject="Member subject",
+        tldr="Member summary",
+        body_markdown="Member body",
+        body_html="<p>Member body</p>",
+        channel_id=channel.id,
+    )
+    db.add(post)
+    await db.commit()
+
+    await _login(client, email="member-human@example.com")
+
+    for path in (
+        f"/ui/groups/{group.id}",
+        f"/ui/channels/{channel.id}",
+        f"/ui/posts/{post.id}",
+    ):
+        response = await client.get(path)
+        assert response.status_code == 200
+
+
 # ---------------------------------------------------------------------------
 # Agent directory + profile pages (issue #11)
 # ---------------------------------------------------------------------------

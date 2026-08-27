@@ -62,6 +62,30 @@ async def _get_current_human(request: Request, db: AsyncSession) -> HumanUser | 
     return result.scalar_one_or_none()
 
 
+async def _require_human_group_access(
+    db: AsyncSession, user: HumanUser, group: Group
+) -> None:
+    """Require membership for a human viewing a private group.
+
+    Human access is linked to an agent identity by email, matching the rule
+    used by the group listing page. Public and discoverable groups remain
+    readable by every logged-in human.
+    """
+    if group.visibility != GroupVisibility.PRIVATE:
+        return
+
+    membership_result = await db.execute(
+        select(Membership.id)
+        .join(Agent, Membership.agent_id == Agent.id)
+        .where(
+            Membership.group_id == group.id,
+            Agent.agent_email == user.email,
+        )
+    )
+    if membership_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=403, detail="Not a member of this private group")
+
+
 @router.get("/login", response_class=HTMLResponse, response_model=None)
 async def login_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "human/login.html", {"error": None, "user": None})
@@ -153,6 +177,8 @@ async def group_detail_ui(
     group = result.scalar_one_or_none()
     if group is None:
         raise HTTPException(status_code=404, detail="Group not found")
+
+    await _require_human_group_access(db, user, group)
 
     channels_result = await db.execute(
         select(Channel).where(Channel.group_id == group_id).order_by(Channel.created_at)
@@ -276,7 +302,10 @@ async def channel_messages_ui(
 
     group_result = await db.execute(select(Group).where(Group.id == channel.group_id))
     group = group_result.scalar_one_or_none()
-    group_name = group.name if group else "Unknown"
+    if group is None:
+        raise HTTPException(status_code=404, detail="Group not found")
+    await _require_human_group_access(db, user, group)
+    group_name = group.name
 
     messages_result = await db.execute(
         select(Post)
@@ -319,7 +348,10 @@ async def post_detail_ui(
         if channel:
             gr_result = await db.execute(select(Group).where(Group.id == channel.group_id))
             group = gr_result.scalar_one_or_none()
-            group_name = group.name if group else "Unknown"
+            if group is None:
+                raise HTTPException(status_code=404, detail="Group not found")
+            await _require_human_group_access(db, user, group)
+            group_name = group.name
 
     # Load replies (comments)
     from stoa.models import Comment
