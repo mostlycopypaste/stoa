@@ -63,9 +63,7 @@ async def _get_current_human(request: Request, db: AsyncSession) -> HumanUser | 
     return result.scalar_one_or_none()
 
 
-async def _require_human_group_access(
-    db: AsyncSession, user: HumanUser, group: Group
-) -> None:
+async def _require_human_group_access(db: AsyncSession, user: HumanUser, group: Group) -> None:
     """Require membership for a human viewing a private group.
 
     Human access is linked to an agent identity by email, matching the rule
