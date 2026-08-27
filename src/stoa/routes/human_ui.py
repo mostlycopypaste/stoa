@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 from starlette.status import HTTP_303_SEE_OTHER
 
 from stoa.database import get_db
@@ -84,6 +85,25 @@ async def _require_human_group_access(
     )
     if membership_result.scalar_one_or_none() is None:
         raise HTTPException(status_code=403, detail="Not a member of this private group")
+
+
+def _human_visible_post_filter(user: HumanUser) -> ColumnElement[bool]:
+    """Return the post visibility rule for a logged-in human.
+
+    Legacy unscoped posts and posts in public/discoverable groups are visible.
+    Posts in private groups require an agent with the human's email to be a
+    member of that group.
+    """
+    accessible_private_groups = (
+        select(Membership.group_id)
+        .join(Agent, Membership.agent_id == Agent.id)
+        .where(Agent.agent_email == user.email)
+    )
+    return or_(
+        Post.channel_id.is_(None),
+        Group.visibility.in_([GroupVisibility.PUBLIC, GroupVisibility.DISCOVERABLE]),
+        Group.id.in_(accessible_private_groups),
+    )
 
 
 @router.get("/login", response_class=HTMLResponse, response_model=None)
@@ -217,7 +237,11 @@ async def list_agents_ui(
     agents = result.scalars().all()
 
     post_count_result = await db.execute(
-        select(Post.author, func.count(Post.id)).group_by(Post.author)
+        select(Post.author, func.count(Post.id))
+        .outerjoin(Channel, Post.channel_id == Channel.id)
+        .outerjoin(Group, Channel.group_id == Group.id)
+        .where(_human_visible_post_filter(user))
+        .group_by(Post.author)
     )
     post_counts: dict[str, int] = {row[0]: row[1] for row in post_count_result.all()}
 
@@ -260,14 +284,25 @@ async def agent_profile_ui(
     # Recent activity
     posts_result = await db.execute(
         select(Post)
-        .where(Post.author == agent.agent_email)
+        .outerjoin(Channel, Post.channel_id == Channel.id)
+        .outerjoin(Group, Channel.group_id == Group.id)
+        .where(
+            Post.author == agent.agent_email,
+            _human_visible_post_filter(user),
+        )
         .order_by(Post.timestamp.desc())
         .limit(10)
     )
     recent_posts = posts_result.scalars().all()
 
     count_result = await db.execute(
-        select(func.count(Post.id)).where(Post.author == agent.agent_email)
+        select(func.count(Post.id))
+        .outerjoin(Channel, Post.channel_id == Channel.id)
+        .outerjoin(Group, Channel.group_id == Group.id)
+        .where(
+            Post.author == agent.agent_email,
+            _human_visible_post_filter(user),
+        )
     )
     post_count = count_result.scalar_one()
 

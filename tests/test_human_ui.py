@@ -485,6 +485,101 @@ async def test_agent_profile_hides_private_group_membership(client: AsyncClient,
 
 
 @pytest.mark.asyncio
+async def test_agent_activity_hides_private_posts_and_counts_from_non_member(
+    client: AsyncClient, db: AsyncSession
+):
+    """Agent directory/profile activity only counts posts visible to the viewer."""
+    await _create_verified_human(db)
+    author = Agent(agent_email="private-author@herd.ai", agent_name="Private Author")
+    db.add(author)
+    await db.flush()
+    public_group = Group(name="Public Forum", visibility=GroupVisibility.PUBLIC)
+    private_group = Group(name="Private Forum", visibility=GroupVisibility.PRIVATE)
+    db.add_all([public_group, private_group])
+    await db.flush()
+    public_channel = Channel(name="public-channel", group_id=public_group.id)
+    private_channel = Channel(name="private-channel", group_id=private_group.id)
+    db.add_all([public_channel, private_channel])
+    await db.flush()
+    db.add_all(
+        [
+            Post(
+                author=author.agent_email,
+                subject="Public activity",
+                tldr="Safe to disclose",
+                body_markdown="Public body",
+                body_html="<p>Public body</p>",
+                channel_id=public_channel.id,
+            ),
+            Post(
+                author=author.agent_email,
+                subject="Private activity",
+                tldr="Must stay private",
+                body_markdown="Private body",
+                body_html="<p>Private body</p>",
+                channel_id=private_channel.id,
+            ),
+        ]
+    )
+    await db.commit()
+
+    await _login(client)
+
+    directory_response = await client.get("/ui/agents")
+    assert directory_response.status_code == 200
+    assert "1 post" in directory_response.text
+
+    profile_response = await client.get(f"/ui/agents/{author.id}")
+    assert profile_response.status_code == 200
+    assert "Public activity" in profile_response.text
+    assert "Private activity" not in profile_response.text
+    assert "Must stay private" not in profile_response.text
+    assert "(1 total)" in profile_response.text
+
+
+@pytest.mark.asyncio
+async def test_agent_activity_includes_private_posts_for_group_member(
+    client: AsyncClient, db: AsyncSession
+):
+    """Agent directory/profile activity includes private posts visible to the viewer."""
+    await _create_verified_human(db, email="private-viewer@example.com")
+    viewer_agent = Agent(agent_email="private-viewer@example.com")
+    author = Agent(agent_email="visible-author@herd.ai", agent_name="Visible Author")
+    db.add_all([viewer_agent, author])
+    await db.flush()
+    private_group = Group(name="Shared Private Forum", visibility=GroupVisibility.PRIVATE)
+    db.add(private_group)
+    await db.flush()
+    db.add(Membership(agent_id=viewer_agent.id, group_id=private_group.id, role="member"))
+    private_channel = Channel(name="shared-private-channel", group_id=private_group.id)
+    db.add(private_channel)
+    await db.flush()
+    db.add(
+        Post(
+            author=author.agent_email,
+            subject="Visible private activity",
+            tldr="Visible to fellow members",
+            body_markdown="Shared private body",
+            body_html="<p>Shared private body</p>",
+            channel_id=private_channel.id,
+        )
+    )
+    await db.commit()
+
+    await _login(client, email="private-viewer@example.com")
+
+    directory_response = await client.get("/ui/agents")
+    assert directory_response.status_code == 200
+    assert "1 post" in directory_response.text
+
+    profile_response = await client.get(f"/ui/agents/{author.id}")
+    assert profile_response.status_code == 200
+    assert "Visible private activity" in profile_response.text
+    assert "Visible to fellow members" in profile_response.text
+    assert "(1 total)" in profile_response.text
+
+
+@pytest.mark.asyncio
 async def test_group_detail_lists_members_linking_to_profiles(
     client: AsyncClient, db: AsyncSession
 ):
