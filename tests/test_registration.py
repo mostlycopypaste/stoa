@@ -3,6 +3,8 @@
 import pytest
 from httpx import AsyncClient
 
+from stoa.routes import registration as registration_routes
+
 
 @pytest.mark.anyio
 async def test_register_agent(client: AsyncClient, make_invite):
@@ -165,11 +167,16 @@ async def test_verified_key_works(client: AsyncClient, make_invite):
 
 
 @pytest.mark.anyio
-async def test_register_human(client: AsyncClient):
+async def test_register_human(client: AsyncClient, make_invite):
     """Human registration returns verification token."""
+    code = await make_invite()
     resp = await client.post(
         "/auth/register-human",
-        json={"email": "human@example.com", "password": "securepass123"},
+        json={
+            "email": "human@example.com",
+            "password": "securepass123",
+            "invite_code": code,
+        },
     )
     assert resp.status_code == 201
     data = resp.json()
@@ -178,14 +185,91 @@ async def test_register_human(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_register_human_duplicate(client: AsyncClient):
+async def test_register_human_duplicate(client: AsyncClient, make_invite):
     """Duplicate human email returns 409."""
-    payload = {"email": "dup-human@example.com", "password": "securepass123"}
+    code = await make_invite()
+    payload = {
+        "email": "dup-human@example.com",
+        "password": "securepass123",
+        "invite_code": code,
+    }
     resp = await client.post("/auth/register-human", json=payload)
     assert resp.status_code == 201
 
     resp = await client.post("/auth/register-human", json=payload)
     assert resp.status_code == 409
+
+
+@pytest.mark.anyio
+async def test_register_human_requires_invite(client: AsyncClient):
+    """The JSON API cannot bypass invite-gated human registration."""
+    resp = await client.post(
+        "/auth/register-human",
+        json={"email": "open-registration@example.com", "password": "securepass123"},
+    )
+
+    assert resp.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_register_human_rejects_unknown_invite(client: AsyncClient):
+    """The JSON API rejects an unknown human invite."""
+    resp = await client.post(
+        "/auth/register-human",
+        json={
+            "email": "bad-human-invite@example.com",
+            "password": "securepass123",
+            "invite_code": "invite_missing",
+        },
+    )
+
+    assert resp.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_register_human_rejects_reused_invite(client: AsyncClient, make_invite):
+    """Human registration consumes the same single-use invites as agent registration."""
+    code = await make_invite()
+    first = await client.post(
+        "/auth/register-human",
+        json={"email": "first-human@example.com", "password": "securepass123", "invite_code": code},
+    )
+    second = await client.post(
+        "/auth/register-human",
+        json={
+            "email": "second-human@example.com",
+            "password": "securepass123",
+            "invite_code": code,
+        },
+    )
+
+    assert first.status_code == 201
+    assert second.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_register_human_reports_email_delivery_failure(
+    client: AsyncClient, make_invite, monkeypatch: pytest.MonkeyPatch
+):
+    """API callers retain the token and receive an accurate delivery message."""
+    code = await make_invite()
+
+    async def fail_delivery(**_: str) -> bool:
+        return False
+
+    monkeypatch.setattr(registration_routes, "send_verification_email", fail_delivery)
+    resp = await client.post(
+        "/auth/register-human",
+        json={
+            "email": "delivery-failed@example.com",
+            "password": "securepass123",
+            "invite_code": code,
+        },
+    )
+
+    assert resp.status_code == 201
+    assert resp.json()["verification_token"]
+    assert "could not be sent" in resp.json()["message"]
 
 
 @pytest.mark.anyio

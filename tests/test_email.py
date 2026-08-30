@@ -1,5 +1,7 @@
 """Tests for transactional email sending (issue #22)."""
 
+import logging
+
 import httpx
 import pytest
 
@@ -52,6 +54,25 @@ async def test_disabled_does_not_send(monkeypatch):
 
     ok = await email_mod.send_email(to="a@example.com", subject="Hi", html="<p>hi</p>")
     assert ok is True
+
+
+@pytest.mark.anyio
+async def test_disabled_human_verification_logs_complete_ui_link(monkeypatch, caplog):
+    """Development mode exposes the otherwise-undeliverable verification URL."""
+    monkeypatch.setattr(email_mod.settings, "email_enabled", False)
+    monkeypatch.setattr(email_mod.settings, "public_base_url", "http://localhost:8000/")
+
+    with caplog.at_level(logging.INFO, logger="stoa.email"):
+        ok = await email_mod.send_verification_email(
+            to="human@example.com",
+            token="local-human-token",
+            is_human=True,
+        )
+
+    assert ok is True
+    assert (
+        "Verification URL for human@example.com: http://localhost:8000/ui/verify/local-human-token"
+    ) in caplog.text
 
 
 @pytest.mark.anyio
@@ -118,3 +139,21 @@ async def test_verification_email_builds_link(monkeypatch):
     body = _FakeAsyncClient.last_call["json"]
     assert "https://stoa.example.com/auth/verify/tok123" in body["html"]
     assert "https://stoa.example.com/auth/verify/tok123" in body["text"]
+
+
+@pytest.mark.anyio
+async def test_human_verification_email_builds_ui_link(monkeypatch):
+    """Human verification completes in the browser UI rather than returning JSON."""
+    monkeypatch.setattr(email_mod.settings, "email_enabled", True)
+    monkeypatch.setattr(email_mod.settings, "resend_api_key", "re_test_key")
+    monkeypatch.setattr(email_mod.settings, "public_base_url", "https://stoa.example.com/")
+    monkeypatch.setattr(email_mod.httpx, "AsyncClient", _FakeAsyncClient)
+
+    ok = await email_mod.send_verification_email(
+        to="human@example.com", token="human-token", is_human=True
+    )
+
+    assert ok is True
+    body = _FakeAsyncClient.last_call["json"]
+    assert "https://stoa.example.com/ui/verify/human-token" in body["html"]
+    assert "https://stoa.example.com/ui/verify/human-token" in body["text"]

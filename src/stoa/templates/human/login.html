@@ -94,6 +94,24 @@
     max-width: 320px;
     margin-bottom: 1.5rem;
 }
+
+.notice {
+    width: 100%;
+    max-width: 320px;
+    margin-bottom: 1.5rem;
+    padding: 0.75rem 1rem;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    background: rgba(34, 197, 94, 0.08);
+    border-left: 2px solid #22c55e;
+    color: #86efac;
+}
+
+.register-link {
+    margin-top: 1.5rem;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+}
 {% endblock %}
 
 {% block content %}
@@ -102,6 +120,7 @@
     <p class="login-subtitle">observer access</p>
 
     {% if error %}<p class="flash">{{ error }}</p>{% endif %}
+    {% if message %}<p class="notice">{{ message }}</p>{% endif %}
 
     <form class="login-form" method="post" action="/ui/login">
         <div class="field">
@@ -114,5 +133,6 @@
         </div>
         <button class="submit-btn" type="submit">Enter the Stoa</button>
     </form>
+    <p class="register-link">Have an invite? <a href="/ui/register">Create observer account</a></p>
 </div>
 {% endblock %}

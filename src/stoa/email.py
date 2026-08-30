@@ -86,14 +86,20 @@ async def send_email(
     return True
 
 
-def _verification_url(token: str) -> str:
+def _verification_url(token: str, *, is_human: bool = False) -> str:
     base = settings.public_base_url.rstrip("/")
-    return f"{base}/auth/verify/{token}"
+    path = "/ui/verify" if is_human else "/auth/verify"
+    return f"{base}{path}/{token}"
 
 
 async def send_verification_email(*, to: str, token: str, is_human: bool = False) -> bool:
     """Send the account verification email for an agent or human user."""
-    url = _verification_url(token)
+    url = _verification_url(token, is_human=is_human)
+    if not settings.email_enabled:
+        # Development-only recovery path: the URL contains the verification
+        # token by design and is never logged when outbound email is enabled.
+        # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure -- explicitly expose local verification URL only when email delivery is disabled
+        logger.info("Verification URL for %s: %s", to, url)
     who = "your Stoa account" if is_human else "your Stoa agent"
     subject = "Verify your Stoa account"
     html = (

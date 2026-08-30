@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 
 import bcrypt
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, or_, select
@@ -13,6 +13,7 @@ from sqlalchemy.sql.elements import ColumnElement
 from starlette.status import HTTP_303_SEE_OTHER
 
 from stoa.database import get_db
+from stoa.email import send_verification_email
 from stoa.models import (
     Agent,
     AuditLog,
@@ -22,6 +23,11 @@ from stoa.models import (
     HumanUser,
     Membership,
     Post,
+)
+from stoa.services.human_registration import (
+    HumanRegistrationError,
+    create_human_account,
+    normalize_human_email,
 )
 
 logger = logging.getLogger(__name__)
@@ -104,9 +110,146 @@ def _human_visible_post_filter(user: HumanUser) -> ColumnElement[bool]:
     )
 
 
+@router.get("/register", response_class=HTMLResponse, response_model=None)
+async def register_page(
+    request: Request,
+    invite: str = Query(default="", max_length=255),
+) -> HTMLResponse:
+    """Render invite-gated human observer registration."""
+    return templates.TemplateResponse(
+        request,
+        "human/register.html",
+        {
+            "error": None,
+            "registered": False,
+            "email_sent": False,
+            "invite_code": invite,
+            "email": "",
+            "verification_token": "",
+            "user": None,
+        },
+    )
+
+
+@router.post("/register", response_class=HTMLResponse, response_model=None)
+async def register_submit(
+    request: Request,
+    invite_code: str = Form(...),
+    email: str = Form(...),
+    password: str = Form(...),
+    password_confirm: str = Form(...),
+    db: AsyncSession = Depends(get_db),
+) -> HTMLResponse:
+    """Create an invited human observer account and send verification email."""
+    invite_code = invite_code.strip()
+    email = email.strip().lower()
+    context: dict[str, object] = {
+        "error": None,
+        "registered": False,
+        "email_sent": False,
+        "invite_code": invite_code,
+        "email": email,
+        "verification_token": "",
+        "user": None,
+    }
+
+    if password != password_confirm:
+        context["error"] = "Passwords do not match"
+        return templates.TemplateResponse(request, "human/register.html", context)
+
+    try:
+        record, verification_token = await create_human_account(
+            email=email,
+            password=password,
+            invite_code=invite_code,
+            source="ui",
+            db=db,
+        )
+        context["email"] = record.email
+    except HumanRegistrationError as exc:
+        context["error"] = exc.message
+        return templates.TemplateResponse(request, "human/register.html", context)
+
+    logger.info("Human registered through UI: %s", record.email)
+    email_sent = await send_verification_email(
+        to=record.email,
+        token=verification_token,
+        is_human=True,
+    )
+
+    context["registered"] = True
+    context["email_sent"] = email_sent
+    context["verification_token"] = verification_token if not email_sent else ""
+    return templates.TemplateResponse(request, "human/register.html", context)
+
+
+@router.post("/resend-verification", response_class=HTMLResponse, response_model=None)
+async def resend_human_verification(
+    request: Request,
+    verification_token: str = Form(...),
+    db: AsyncSession = Depends(get_db),
+) -> HTMLResponse:
+    """Retry delivery for an unverified account without consuming another invite."""
+    context: dict[str, object] = {
+        "error": None,
+        "registered": True,
+        "email_sent": True,
+        "invite_code": "",
+        "email": "your email address",
+        "verification_token": "",
+        "user": None,
+    }
+    result = await db.execute(
+        select(HumanUser).where(
+            HumanUser.verification_token == verification_token,
+            HumanUser.is_verified.is_(False),
+        )
+    )
+    human = result.scalar_one_or_none()
+    if human is not None and human.verification_token is not None:
+        context["email"] = human.email
+        context["email_sent"] = await send_verification_email(
+            to=human.email,
+            token=human.verification_token,
+            is_human=True,
+        )
+        if not context["email_sent"]:
+            context["verification_token"] = human.verification_token
+
+    return templates.TemplateResponse(request, "human/register.html", context)
+
+
+@router.get("/verify/{token}", response_model=None)
+async def verify_human_email(
+    token: str,
+    db: AsyncSession = Depends(get_db),
+) -> RedirectResponse:
+    """Verify a human account and return the browser to the login page."""
+    result = await db.execute(select(HumanUser).where(HumanUser.verification_token == token))
+    human = result.scalar_one_or_none()
+    if human is None:
+        raise HTTPException(status_code=404, detail="Invalid verification token")
+
+    human.is_verified = True
+    human.verification_token = None
+    await db.flush()
+    return RedirectResponse(url="/ui/login?verified=1", status_code=HTTP_303_SEE_OTHER)
+
+
 @router.get("/login", response_class=HTMLResponse, response_model=None)
-async def login_page(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request, "human/login.html", {"error": None, "user": None})
+async def login_page(
+    request: Request,
+    verified: bool = Query(default=False),
+) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "human/login.html",
+        {
+            "error": None,
+            "message": "Email verified. You can now log in." if verified else None,
+            "user": None,
+        },
+    )
 
 
 @router.post("/login", response_class=HTMLResponse, response_model=None)
@@ -116,20 +259,29 @@ async def login_submit(
     password: str = Form(...),
     db: AsyncSession = Depends(get_db),
 ) -> HTMLResponse | RedirectResponse:
-    result = await db.execute(select(HumanUser).where(HumanUser.email == email))
-    user = result.scalar_one_or_none()
+    try:
+        email = normalize_human_email(email)
+    except HumanRegistrationError:
+        user = None
+    else:
+        result = await db.execute(select(HumanUser).where(func.lower(HumanUser.email) == email))
+        user = result.scalar_one_or_none()
 
     if user is None or not bcrypt.checkpw(password.encode(), user.password_hash.encode()):
         logger.warning("Failed human login attempt: %s", email)
         db.add(AuditLog(event_type="human_login_failed", agent_email=email))
         await db.flush()
         return templates.TemplateResponse(
-            request, "human/login.html", {"error": "Invalid email or password", "user": None}
+            request,
+            "human/login.html",
+            {"error": "Invalid email or password", "message": None, "user": None},
         )
 
     if not user.is_verified:
         return templates.TemplateResponse(
-            request, "human/login.html", {"error": "Account not verified", "user": None}
+            request,
+            "human/login.html",
+            {"error": "Account not verified", "message": None, "user": None},
         )
 
     request.session["user_id"] = user.id
