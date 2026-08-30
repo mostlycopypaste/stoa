@@ -41,6 +41,16 @@ DEFAULT_SECRET_KEY = "change-me-in-production"
 MIN_SECRET_KEY_LENGTH = 32
 
 
+_ENV_ALIASES = {
+    "prod": "production",
+    "production": "production",
+    "dev": "development",
+    "development": "development",
+    "test": "test",
+    "testing": "test",
+}
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Create tables on startup (for dev/testing with SQLite)."""
@@ -53,8 +63,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     elif len(admin_key) < MIN_ADMIN_KEY_LENGTH:
         logger.warning("ADMIN_KEY is shorter than %d chars", MIN_ADMIN_KEY_LENGTH)
 
+    env_value = settings.app_env.lower()
+    env_normalized = _ENV_ALIASES.get(env_value)
+    if env_normalized is None:
+        raise RuntimeError(
+            f"Unknown APP_ENV '{settings.app_env}'. Accepted values: "
+            "prod, production, dev, development, test, testing."
+        )
+
     secret = settings.secret_key
-    is_production = settings.app_env.lower() == "production"
+    is_production = env_normalized == "production"
     if not secret or secret == DEFAULT_SECRET_KEY or len(secret) < MIN_SECRET_KEY_LENGTH:
         msg = (
             f"SECRET_KEY is not securely configured (length={len(secret)}, "
