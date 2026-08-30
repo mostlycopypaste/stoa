@@ -120,6 +120,7 @@ async def test_admin_key_validation_remains_warning_only_in_production(
     assert any("ADMIN_KEY not set" in record.message for record in caplog.records)
     assert not _has_secret_warning(caplog.records)
 
+
 async def test_unknown_app_env_raises_runtime_error(
     monkeypatch: pytest.MonkeyPatch,
     isolate_lifespan_dependencies: None,
@@ -140,4 +141,3 @@ async def test_prod_alias_treated_as_production(
 
     with pytest.raises(RuntimeError, match="SECRET_KEY is not securely configured"):
         await _run_lifespan()
-
