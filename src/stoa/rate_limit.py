@@ -1,10 +1,16 @@
 """In-memory sliding window rate limiter per API key.
 
 Default limit is configurable via the ``RATE_LIMIT_MAX`` and
-``RATE_LIMIT_WINDOW_SECONDS`` env vars. Admin-key requests bypass
-the limiter entirely.
+``RATE_LIMIT_WINDOW_SECONDS`` env vars.
+
+Admin-key requests bypass the limiter on ``/api/admin/*`` only, so that
+operational sequences stay unthrottled without granting unlimited rate on
+every other endpoint. Admin-key requests to any other path are subject to
+the normal per-key limit. Every admin-key request is audited regardless of
+whether it was bypassed.
 """
 
+import hashlib
 import logging
 import time
 from collections import defaultdict, deque
@@ -64,6 +70,10 @@ def reset_limiter() -> None:
     _limiter._requests.clear()
 
 
+ADMIN_KEY_PREFIX = "admin:"
+ADMIN_PATH_PREFIX = "/api/admin"
+
+
 def _extract_api_key(request: Request) -> str | None:
     """Extract the rate-limit identity key from the request."""
     api_key = request.headers.get("x-api-key")
@@ -71,8 +81,31 @@ def _extract_api_key(request: Request) -> str | None:
         return api_key
     admin_key = request.headers.get("x-admin-key")
     if admin_key:
-        return f"admin:{admin_key}"  # nosemgrep
+        return f"{ADMIN_KEY_PREFIX}{admin_key}"  # nosemgrep
     return None
+
+
+def _is_admin_path(path: str) -> bool:
+    """True for ``/api/admin`` and anything beneath it.
+
+    Compared against the prefix plus a separator so that a sibling route
+    such as ``/api/administrators`` cannot claim the bypass.
+    """
+    return path == ADMIN_PATH_PREFIX or path.startswith(f"{ADMIN_PATH_PREFIX}/")
+
+
+def _identity_label(key: str) -> str:
+    """Stable, non-reversible identifier for audit records.
+
+    Agent keys keep the historical 8-character prefix. Admin keys are
+    hashed instead: the bypass is now scoped, so an admin key can reach
+    the throttled branch and its audit entry, and a raw prefix there
+    would write live admin key material into the audit log.
+    """
+    if key.startswith(ADMIN_KEY_PREFIX):
+        raw = key[len(ADMIN_KEY_PREFIX) :]
+        return f"{ADMIN_KEY_PREFIX}{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:12]}"
+    return key[:8]
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -81,17 +114,35 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if key is None:
             return await call_next(request)
 
-        # Admin-key requests bypass rate limiting so operators can run
-        # rapid operational sequences (key resets, stats, audit scans)
-        # without being throttled by the per-key limiter.
-        if key.startswith("admin:"):
-            return await call_next(request)
+        # Admin-key requests bypass rate limiting on /api/admin/* so operators
+        # can run rapid operational sequences (key resets, stats, audit scans)
+        # without being throttled. Elsewhere they take the normal limit: an
+        # admin key should not confer unlimited throughput on public reads.
+        #
+        # Every admin-key request is audited either way. Previously an entry
+        # was written only when a request was throttled, which by definition
+        # never happened for admin keys — leaving admin-key use unlogged, and
+        # a leaked key invisible.
+        if key.startswith(ADMIN_KEY_PREFIX):
+            bypassed = _is_admin_path(request.url.path)
+            audit_log(
+                "admin_key_request",
+                agent_email=None,
+                details={
+                    "key_prefix": _identity_label(key),
+                    "method": request.method,
+                    "path": request.url.path,
+                    "rate_limit_bypassed": bypassed,
+                },
+            )
+            if bypassed:
+                return await call_next(request)
 
         if not _limiter.is_allowed(key):
             retry_after = _limiter.retry_after(key)
             route = request.url.path
             method = request.method
-            key_prefix = key[:8]
+            key_prefix = _identity_label(key)
 
             # Log with actionable context: who (prefix), what (method+path),
             # when (retry_after), how many allowed.

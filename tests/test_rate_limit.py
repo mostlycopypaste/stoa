@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from httpx import AsyncClient
 
-from stoa.rate_limit import RateLimiter
+from stoa.rate_limit import RateLimiter, _identity_label, _is_admin_path
 
 HEADERS = {"X-API-Key": "alice-key"}
 
@@ -90,3 +90,92 @@ class TestRateLimitMiddleware:
         # No rate-limit headers on admin bypass
         assert "X-RateLimit-Limit" not in response.headers
         assert "X-RateLimit-Remaining" not in response.headers
+
+
+class TestAdminBypassScope:
+    """Issue #50 — the admin bypass is scoped, audited, and non-leaking."""
+
+    def test_is_admin_path_matches_admin_routes(self) -> None:
+        assert _is_admin_path("/api/admin") is True
+        assert _is_admin_path("/api/admin/stats") is True
+        assert _is_admin_path("/api/admin/keys/x@y.z/reset") is True
+
+    def test_is_admin_path_rejects_sibling_prefix(self) -> None:
+        """A sibling route must not inherit the bypass by prefix match."""
+        assert _is_admin_path("/api/administrators") is False
+        assert _is_admin_path("/api/adminfoo") is False
+        assert _is_admin_path("/api/posts") is False
+        assert _is_admin_path("/") is False
+
+    def test_identity_label_keeps_agent_prefix(self) -> None:
+        assert _identity_label("alice-key-123456") == "alice-ke"
+
+    def test_identity_label_does_not_leak_admin_key(self) -> None:
+        """Admin labels must be non-reversible — they now reach audit records."""
+        secret = "test-admin-key-that-is-long-enough-for-validation"
+        label = _identity_label(f"admin:{secret}")
+        assert label.startswith("admin:")
+        assert secret not in label
+        assert secret[:8] not in label
+        # Stable across calls, so operators can correlate requests.
+        assert label == _identity_label(f"admin:{secret}")
+        # Distinct keys get distinct labels.
+        assert label != _identity_label("admin:some-other-admin-key-entirely")
+
+    async def test_admin_key_bypasses_on_admin_path(
+        self, client: AsyncClient, admin_headers: dict
+    ) -> None:
+        response = await client.get("/api/admin/stats", headers=admin_headers)
+        assert response.status_code == 200
+        assert "X-RateLimit-Limit" not in response.headers
+
+    async def test_admin_key_is_limited_off_admin_path(
+        self, client: AsyncClient, admin_headers: dict
+    ) -> None:
+        """The core of #50: no unlimited rate on non-admin endpoints.
+
+        The route itself rejects an admin key as agent credentials, so the
+        status here is 401. That is beside the point — what matters is that
+        the middleware ran the limiter instead of waving the request through,
+        which the presence of the rate-limit headers demonstrates.
+        """
+        response = await client.get("/api/posts", headers=admin_headers)
+        assert "X-RateLimit-Limit" in response.headers
+        assert "X-RateLimit-Remaining" in response.headers
+
+    async def test_admin_key_can_be_throttled_off_admin_path(
+        self, client: AsyncClient, admin_headers: dict
+    ) -> None:
+        with patch("stoa.rate_limit._limiter") as mock_limiter:
+            mock_limiter.is_allowed.return_value = False
+            mock_limiter.retry_after.return_value = 7
+            mock_limiter.remaining.return_value = 0
+            mock_limiter.max_requests = 10
+            mock_limiter.window_seconds = 60
+
+            response = await client.get("/api/posts", headers=admin_headers)
+            assert response.status_code == 429
+
+    async def test_admin_request_is_audited_when_bypassed(
+        self, client: AsyncClient, admin_headers: dict
+    ) -> None:
+        with patch("stoa.rate_limit.audit_log") as mock_audit:
+            await client.get("/api/admin/stats", headers=admin_headers)
+
+        events = [c for c in mock_audit.call_args_list if c.args[0] == "admin_key_request"]
+        assert len(events) == 1
+        details = events[0].kwargs["details"]
+        assert details["path"] == "/api/admin/stats"
+        assert details["method"] == "GET"
+        assert details["rate_limit_bypassed"] is True
+        assert admin_headers["X-Admin-Key"] not in str(details)
+
+    async def test_admin_request_is_audited_when_not_bypassed(
+        self, client: AsyncClient, admin_headers: dict
+    ) -> None:
+        with patch("stoa.rate_limit.audit_log") as mock_audit:
+            await client.get("/api/posts", headers=admin_headers)
+
+        events = [c for c in mock_audit.call_args_list if c.args[0] == "admin_key_request"]
+        assert len(events) == 1
+        assert events[0].kwargs["details"]["rate_limit_bypassed"] is False
