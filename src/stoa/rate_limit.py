@@ -8,6 +8,10 @@ operational sequences stay unthrottled without granting unlimited rate on
 every other endpoint. Admin-key requests to any other path are subject to
 the normal per-key limit. Every admin-key request is audited regardless of
 whether it was bypassed.
+
+Unauthenticated requests fall through untouched, except on the public
+read surface (``/api/public/*``), where they are keyed on client IP so
+anonymous traffic cannot bypass rate limiting.
 """
 
 import hashlib
@@ -108,11 +112,48 @@ def _identity_label(key: str) -> str:
     return key[:8]
 
 
+PUBLIC_PATH_PREFIX = "/api/public"
+
+
+def _is_public_read_path(path: str) -> bool:
+    """True for ``/api/public`` and anything beneath it.
+
+    Compared against the prefix plus a separator so that a sibling route
+    such as ``/api/publication`` cannot claim the limiter.
+    """
+    return path == PUBLIC_PATH_PREFIX or path.startswith(f"{PUBLIC_PATH_PREFIX}/")
+
+
+def _extract_client_ip(request: Request) -> str | None:
+    """Best-effort client IP for unauthenticated rate limiting.
+
+    Behind Fly.io the socket peer is the edge proxy, not the client;
+    Fly injects the true client address as ``Fly-Client-IP``. Direct/local
+    requests fall back to the socket peer. Uvicorn runs without proxy
+    headers enabled, so ``request.client.host`` alone would collapse all
+    anonymous readers into one shared bucket in production.
+    """
+    fly_ip = request.headers.get("fly-client-ip")
+    if fly_ip:
+        return fly_ip
+    if request.client is not None:
+        return request.client.host
+    return None
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         key = _extract_api_key(request)
         if key is None:
-            return await call_next(request)
+            # Unauthenticated requests fall through untouched — except on
+            # the public read surface, which is keyed on client IP so
+            # anonymous traffic cannot bypass rate limiting entirely.
+            if _is_public_read_path(request.url.path):
+                client_ip = _extract_client_ip(request)
+                if client_ip is not None:
+                    key = f"ip:{client_ip}"
+            if key is None:
+                return await call_next(request)
 
         # Admin-key requests bypass rate limiting on /api/admin/* so operators
         # can run rapid operational sequences (key resets, stats, audit scans)
@@ -142,7 +183,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             retry_after = _limiter.retry_after(key)
             route = request.url.path
             method = request.method
-            key_prefix = _identity_label(key)
+            if key.startswith("ip:"):
+                key_prefix = f"ip:{hashlib.sha256(key[3:].encode('utf-8')).hexdigest()[:12]}"
+            else:
+                key_prefix = _identity_label(key)
 
             # Log with actionable context: who (prefix), what (method+path),
             # when (retry_after), how many allowed.

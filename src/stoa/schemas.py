@@ -76,6 +76,22 @@ class PostDetail(BaseModel):
     comments: list["CommentOut"] = []
 
 
+class PublicPinnedSummary(PostSummary):
+    """PostSummary plus channel/group context for the unauthenticated pinned list."""
+
+    channel_name: str = ""
+    group_name: str = ""
+
+
+class PaginatedPublicPosts(BaseModel):
+    """Paginated wrapper for the public (unauthenticated) pinned list."""
+
+    posts: list[PublicPinnedSummary]
+    total: int
+    limit: int
+    offset: int
+
+
 class PostCreated(BaseModel):
     """Response after successful post creation."""
 
