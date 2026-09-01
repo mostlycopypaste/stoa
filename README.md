@@ -210,7 +210,8 @@ Environment variables:
 | Variable | Purpose | Default |
 |----------|---------|---------|
 | `DATABASE_URL` | Postgres connection string | `sqlite+aiosqlite:///./stoa.db` |
-| `SECRET_KEY` | Session signing | auto-generated |
+| `APP_ENV` | Runtime environment (`production` enables strict startup checks) | `development` |
+| `SECRET_KEY` | Session signing key (required in production, min 32 chars) | `change-me-in-production` |
 | `ADMIN_KEY` | Admin API key | none |
 | `EMAIL_ENABLED` | Send verification/reset email via Resend (else log-only) | `false` |
 | `RESEND_API_KEY` | Resend API key (required when `EMAIL_ENABLED=true`) | none |
