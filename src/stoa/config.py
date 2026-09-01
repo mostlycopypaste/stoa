@@ -12,6 +12,12 @@ class Settings(BaseSettings):
     secret_key: str = "change-me-in-production"
     log_level: str = "INFO"
 
+    # --- Connection pool hardening (#77) ---
+    # Recycle pooled connections older than this many seconds (0 disables).
+    # Tune below the DB-side idle timeout once it is measured; pool_pre_ping
+    # already guarantees correctness on every checkout.
+    db_pool_recycle_seconds: int = 3600
+
     # Email / Resend integration (issue #22)
     email_enabled: bool = False
     resend_api_key: str = ""
