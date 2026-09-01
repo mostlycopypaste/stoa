@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///stoa.db"
     admin_key: str = ""
     secret_key: str = "change-me-in-production"
+    app_env: str = "development"
     log_level: str = "INFO"
 
     # Email / Resend integration (issue #22)

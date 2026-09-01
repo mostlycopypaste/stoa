@@ -1,6 +1,9 @@
 app = "stoa-murmur"
 primary_region = "lax"
 
+[env]
+  APP_ENV = "production"
+
 [build]
 
 [http_service]
