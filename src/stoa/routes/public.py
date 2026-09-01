@@ -6,6 +6,12 @@ without an API key, read-only, and billed to no one — no ReadLog rows are
 written for reads through this surface. Pinned posts in discoverable or
 private groups stay inside the group boundary; the public endpoints do not
 confirm their existence (404, never 403).
+
+Identity policy: author emails are masked on this surface (local part
+only — "alice@…"). Content visibility and identity visibility are
+different classes: members who post or comment in a public channel never
+opted into their addresses being scrapable, and a later pin must not
+silently publish them. The authenticated surface is unchanged.
 """
 
 import logging
@@ -17,12 +23,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from stoa.database import get_db
 from stoa.models import Channel, Comment, Group, GroupVisibility, Post
 from stoa.schemas import (
-    CommentOut,
     PaginatedPublicPosts,
-    PostDetail,
+    PublicCommentOut,
     PublicPinnedSummary,
+    PublicPostDetail,
 )
-from stoa.services import count_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -77,17 +82,26 @@ async def list_public_pinned(
         for channel, group in channel_result.all():
             channels[channel.id] = (channel.name, group.name)
 
+    # Comment counts for the page in one grouped round trip (bounded by
+    # limit<=100, but no reason to make it limit round trips).
+    comment_counts: dict[int, int] = {}
+    if posts:
+        count_result = await db.execute(
+            select(Comment.post_id, func.count(Comment.id))
+            .where(Comment.post_id.in_([post.id for post in posts]))
+            .group_by(Comment.post_id)
+        )
+        comment_counts = {post_id: count for post_id, count in count_result.all()}
+
     summaries = []
     for post in posts:
         channel_name, group_name = channels.get(post.channel_id or -1, ("", ""))
-        count_res = await db.execute(
-            select(func.count(Comment.id)).where(Comment.post_id == post.id)
-        )
-        comment_count = count_res.scalar() or 0
+        # The author field is masked structurally by PublicPinnedSummary's
+        # validator — the route cannot forget to do it.
         summaries.append(
             PublicPinnedSummary.model_validate(post, from_attributes=True).model_copy(
                 update={
-                    "comment_count": int(comment_count),
+                    "comment_count": int(comment_counts.get(post.id, 0)),
                     "channel_name": channel_name,
                     "group_name": group_name,
                 }
@@ -97,12 +111,16 @@ async def list_public_pinned(
     return {"posts": summaries, "total": total, "limit": limit, "offset": offset}
 
 
-@router.get("/posts/{post_id}", response_model=PostDetail)
+@router.get("/posts/{post_id}", response_model=PublicPostDetail)
 async def get_public_post(
     post_id: int,
     db: AsyncSession = Depends(get_db),
-) -> dict:  # type: ignore[type-arg]
+) -> PublicPostDetail:
     """Full detail for a pinned post in a public channel — no API key, no read billing.
+
+    Author identities are masked (local part only) on this surface —
+    members who commented on a pinned post never opted into their
+    addresses being published; the authenticated surface is unchanged.
 
     Returns 404 (never 403) for anything not publicly readable so this
     surface cannot be used to confirm that other posts exist.
@@ -125,26 +143,31 @@ async def get_public_post(
     comment_result = await db.execute(
         select(Comment).where(Comment.post_id == post_id).order_by(Comment.timestamp)
     )
+    # No token_cost on the public surface (and no count_tokens work):
+    # reads here are billed to no one, so billing metadata would be a lie.
     comments = [
-        CommentOut.model_validate(c, from_attributes=True).model_copy(
-            update={"token_cost": count_tokens(str(c.body_markdown))}
-        )
+        PublicCommentOut.model_validate(c, from_attributes=True)
         for c in comment_result.scalars().all()
     ]
 
+    # Constructed attribute-by-attribute (never model_validate on the
+    # Post ORM object): a schema-level `comments` field would reach the
+    # lazy `Post.comments` relationship, which cannot load in async
+    # context — and the route wants timestamp order, not relationship
+    # order, anyway.
+    #
     # Deliberately no ReadLog: reads through the public surface are billed
     # to no one (platform policy).
-    return {
-        "id": post.id,
-        "subject": post.subject,
-        "tldr": post.tldr,
-        "author": post.author,
-        "body_markdown": post.body_markdown,
-        "token_cost": post.token_cost,
-        "status": post.status,
-        "pinned": post.pinned,
-        "pinned_at": post.pinned_at,
-        "timestamp": post.timestamp,
-        "parent_post_id": post.parent_post_id,
-        "comments": comments,
-    }
+    return PublicPostDetail(
+        id=post.id,
+        subject=post.subject,
+        tldr=post.tldr,
+        author=post.author,  # masked by the schema validator
+        body_markdown=post.body_markdown,
+        status=post.status,
+        pinned=post.pinned,
+        pinned_at=post.pinned_at,
+        timestamp=post.timestamp,
+        parent_post_id=post.parent_post_id,
+        comments=comments,
+    )

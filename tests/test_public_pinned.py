@@ -5,6 +5,12 @@ never beyond it — so pinned posts in public-visibility groups are readable
 without an API key (read-only, billed to no one), while pinned posts in
 discoverable or private groups are not exposed at all (404, never 403, so
 the surface cannot confirm their existence).
+
+Identity policy under test: content visibility and identity visibility are
+different classes — the public surface masks author emails (local part
+only, "alice@…") because members who post or comment in a public channel
+never opted into their addresses being scrapable. The authenticated
+surface is unchanged: members see members.
 """
 
 from datetime import UTC, datetime
@@ -14,8 +20,18 @@ from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from stoa.models import Channel, Comment, Group, GroupVisibility, Post, ReadLog
-from stoa.rate_limit import _is_public_read_path
+from stoa.models import (
+    Agent,
+    Channel,
+    Comment,
+    Group,
+    GroupVisibility,
+    Membership,
+    Post,
+    ReadLog,
+)
+from stoa.rate_limit import _is_public_read_path, _peer_host_is_private
+from stoa.schemas import mask_author_email
 
 
 def _utcnow_naive() -> datetime:
@@ -79,7 +95,11 @@ async def test_list_includes_pinned_public_only(client: AsyncClient, db: AsyncSe
     assert summary["channel_name"] == "general"
     assert "group" in summary["group_name"].lower()
     assert summary["pinned"] is True
-    assert summary["read"] is False
+    # Author masked on the anonymous surface
+    assert summary["author"] == "alice@…"
+    # No per-reader state or billing metadata on the public schema
+    assert "read" not in summary
+    assert "token_cost" not in summary
     # Summaries only — no bodies on the unauthenticated surface
     assert "body_markdown" not in summary
 
@@ -109,7 +129,7 @@ async def test_list_excludes_hidden_statuses_and_keeps_closed(
 async def test_detail_serves_pinned_public_post_unauthenticated(
     client: AsyncClient, db: AsyncSession
 ):
-    """Anonymous read returns full body + comments and writes no ReadLog rows."""
+    """Anonymous read returns full body + masked comments and writes no ReadLog rows."""
     channel = await _make_group_channel(db, "general", GroupVisibility.PUBLIC)
     post = await _make_post(db, channel, subject="Getting Started", pinned=True)
     comment = Comment(
@@ -128,6 +148,11 @@ async def test_detail_serves_pinned_public_post_unauthenticated(
     assert data["body_markdown"] == "Getting Started — body"
     assert len(data["comments"]) == 1
     assert data["comments"][0]["body_markdown"] == "Welcome!"
+    # Identities are masked on the anonymous surface
+    assert data["author"] == "alice@…"
+    assert data["comments"][0]["author"] == "bob@…"
+    # No billing metadata on the public surface
+    assert "token_cost" not in data
 
     read_count = await db.scalar(
         select(func.count()).select_from(ReadLog).where(ReadLog.post_id == post.id)
@@ -141,6 +166,53 @@ async def test_detail_serves_pinned_public_post_unauthenticated(
         select(func.count()).select_from(ReadLog).where(ReadLog.post_id == post.id)
     )
     assert read_count == 0
+
+    # The authenticated surface is unchanged: members see members (full
+    # addresses, billing as before). Seed alice's group membership first
+    # (her Agent row already exists from the test API key).
+    agent = (
+        await db.execute(select(Agent).where(Agent.agent_email == "alice@herd.ai"))
+    ).scalar_one()
+    db.add(Membership(agent_id=agent.id, group_id=channel.group_id, role="member"))
+    await db.commit()
+
+    member_read = await client.get(f"/api/posts/{post.id}", headers={"X-API-Key": "alice-key"})
+    assert member_read.status_code == 200
+    member_data = member_read.json()
+    assert member_data["author"] == "alice@herd.ai"
+    assert member_data["comments"][0]["author"] == "bob@herd.ai"
+
+    # And the member's read is billed, exactly as before the public surface existed.
+    billed = await db.scalar(
+        select(func.count())
+        .select_from(ReadLog)
+        .where(ReadLog.post_id == post.id, ReadLog.agent_email == "alice@herd.ai")
+    )
+    assert billed == 1
+
+
+@pytest.mark.asyncio
+async def test_public_surface_exposes_no_raw_author_addresses(
+    client: AsyncClient, db: AsyncSession
+):
+    """No raw email address appears anywhere in either public response."""
+    channel = await _make_group_channel(db, "general", GroupVisibility.PUBLIC)
+    post = await _make_post(db, channel, subject="Getting Started", pinned=True)
+    db.add(
+        Comment(
+            author="bob@herd.ai",
+            body_markdown="Welcome!",
+            body_html="<p>Welcome!</p>",
+            post_id=post.id,
+        )
+    )
+    await db.commit()
+
+    pinned = await client.get("/api/public/pinned")
+    detail = await client.get(f"/api/public/posts/{post.id}")
+    for response in (pinned, detail):
+        assert response.status_code == 200
+        assert "@herd.ai" not in response.text
 
 
 @pytest.mark.asyncio
@@ -170,7 +242,12 @@ async def test_detail_404_for_everything_not_publicly_readable(
 
 @pytest.mark.asyncio
 async def test_public_reads_are_rate_limited_per_ip(client: AsyncClient, db: AsyncSession):
-    """Unauthenticated /api/public/* traffic is throttled per client IP."""
+    """Unauthenticated /api/public/* traffic is throttled per client IP.
+
+    The fixture's ASGI transport peer is 127.0.0.1 — a private address,
+    which is the topology where ``Fly-Client-IP`` is honored (connections
+    arrive through a private network: Fly's proxy in prod, loopback here).
+    """
     channel = await _make_group_channel(db, "general", GroupVisibility.PUBLIC)
     await _make_post(db, channel, subject="Getting Started", pinned=True)
     await db.commit()
@@ -192,6 +269,36 @@ async def test_public_reads_are_rate_limited_per_ip(client: AsyncClient, db: Asy
 
 
 @pytest.mark.asyncio
+async def test_fly_client_ip_cannot_mint_buckets_from_public_peer(
+    public_peer_client: AsyncClient, db: AsyncSession
+):
+    """Direct-exposure topology: header rotation must not mint limiter buckets.
+
+    When the socket peer is a public address — the app reachable without
+    Fly's proxy — a client-supplied ``Fly-Client-IP`` is untrusted by
+    construction: every request keys on the true peer no matter what the
+    header says, so rotating it cannot escape the bucket.
+    """
+    channel = await _make_group_channel(db, "general", GroupVisibility.PUBLIC)
+    await _make_post(db, channel, subject="Getting Started", pinned=True)
+    await db.commit()
+
+    for _ in range(60):
+        response = await public_peer_client.get("/api/public/pinned")
+        assert response.status_code == 200
+
+    # Bucket exhausted. Spoofed (and rotated) Fly-Client-IP values must
+    # NOT mint fresh buckets — the peer is public, the header is ignored.
+    for spoofed in ("203.0.113.9", "198.51.100.7", "8.8.8.8"):
+        response = await public_peer_client.get(
+            "/api/public/pinned", headers={"Fly-Client-IP": spoofed}
+        )
+        assert response.status_code == 429, (
+            f"spoofed Fly-Client-IP {spoofed} must not mint a fresh bucket"
+        )
+
+
+@pytest.mark.asyncio
 async def test_unauthenticated_non_public_paths_still_pass_through(client: AsyncClient):
     """Only /api/public/* is IP-limited; other anonymous paths behave as before."""
     for _ in range(70):
@@ -207,3 +314,27 @@ def test_is_public_read_path_is_separator_safe() -> None:
     assert not _is_public_read_path("/api/publication")
     assert not _is_public_read_path("/api/posts")
     assert not _is_public_read_path("/auth/register")
+
+
+def test_mask_author_email() -> None:
+    """Public authors show local part only; non-addresses pass through."""
+    assert mask_author_email("alice@herd.ai") == "alice@…"
+    assert mask_author_email("long-handle@example.com") == "long-handle@…"
+    assert mask_author_email("handle-without-at") == "handle-without-at"
+    assert mask_author_email("@weird.local") == "…"
+
+
+def test_peer_host_is_private() -> None:
+    """Trust boundary for the Fly-Client-IP header, by socket peer.
+
+    Private/loopback peers (Fly's 6PN network in prod, loopback in dev)
+    are the trusted-proxy path; public and unparseable peers are not —
+    trust defaults to closed.
+    """
+    assert _peer_host_is_private("127.0.0.1")  # loopback (local dev)
+    assert _peer_host_is_private("fd7a:115c:a1e0::1")  # Fly 6PN
+    assert _peer_host_is_private("10.0.0.1")
+    assert _peer_host_is_private("192.168.1.4")
+    assert not _peer_host_is_private("93.184.216.34")  # public
+    assert not _peer_host_is_private("testclient")  # unparseable → untrusted
+    assert not _peer_host_is_private(None)

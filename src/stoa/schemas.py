@@ -76,22 +76,6 @@ class PostDetail(BaseModel):
     comments: list["CommentOut"] = []
 
 
-class PublicPinnedSummary(PostSummary):
-    """PostSummary plus channel/group context for the unauthenticated pinned list."""
-
-    channel_name: str = ""
-    group_name: str = ""
-
-
-class PaginatedPublicPosts(BaseModel):
-    """Paginated wrapper for the public (unauthenticated) pinned list."""
-
-    posts: list[PublicPinnedSummary]
-    total: int
-    limit: int
-    offset: int
-
-
 class PostCreated(BaseModel):
     """Response after successful post creation."""
 
@@ -193,6 +177,105 @@ class CommentThreadOut(CommentOut):
     """Comment with nested replies for thread view (issue #15)."""
 
     replies: list["CommentThreadOut"] = []
+
+
+def mask_author_email(author: str) -> str:
+    """Mask an author identity for the unauthenticated public surface.
+
+    "A pin escalates visibility within its channel's audience, never
+    beyond it" — but that ruling was about *content*: members who post or
+    comment in a public channel never opted into their email addresses
+    being scrapable, and a later pin must not silently publish them.
+    The public surface therefore exposes only the local part of the
+    address (``alice@…``); values without ``@`` are returned unchanged.
+    The authenticated surface is unchanged — members see members.
+    """
+    if "@" not in author:
+        return author
+    local = author.split("@", 1)[0]
+    return f"{local}@…" if local else "…"
+
+
+class PublicCommentOut(BaseModel):
+    """Comment on the public surface: author masked, no billing metadata."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    author: str
+    body_markdown: str
+    timestamp: datetime
+    in_reply_to: int | None = None
+
+    @field_validator("author")
+    @classmethod
+    def _mask_author(cls, value: str) -> str:
+        return mask_author_email(value)
+
+
+class PublicPostDetail(BaseModel):
+    """PostDetail for the public surface: author masked, no billing metadata."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    subject: str
+    tldr: str
+    author: str
+    body_markdown: str
+    status: str = Field(
+        default="open", description="Post lifecycle status (open/closed/archived/deleted)"
+    )
+    pinned: bool = False
+    pinned_at: datetime | None = None
+    timestamp: datetime
+    parent_post_id: int | None = None
+    comments: list[PublicCommentOut] = []
+
+    @field_validator("author")
+    @classmethod
+    def _mask_author(cls, value: str) -> str:
+        return mask_author_email(value)
+
+
+class PublicPinnedSummary(BaseModel):
+    """Pinned-post summary for the unauthenticated list.
+
+    Deliberately standalone rather than subclassing PostSummary: the
+    anonymous surface has no per-reader state (``read``) and no billing
+    metadata (``token_cost``), and its ``author`` is masked.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    subject: str
+    tldr: str
+    author: str
+    status: str = Field(
+        default="open", description="Post lifecycle status (open/closed/archived/deleted)"
+    )
+    pinned: bool = False
+    pinned_at: datetime | None = None
+    timestamp: datetime
+    parent_post_id: int | None = None
+    comment_count: int = 0
+    channel_name: str = ""
+    group_name: str = ""
+
+    @field_validator("author")
+    @classmethod
+    def _mask_author(cls, value: str) -> str:
+        return mask_author_email(value)
+
+
+class PaginatedPublicPosts(BaseModel):
+    """Paginated wrapper for the public (unauthenticated) pinned list."""
+
+    posts: list[PublicPinnedSummary]
+    total: int
+    limit: int
+    offset: int
 
 
 class ThreadOut(BaseModel):

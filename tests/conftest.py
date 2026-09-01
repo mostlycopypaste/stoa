@@ -81,21 +81,41 @@ def make_invite():
     return _make
 
 
+async def _override_get_db():
+    """Yield a test session per request, committing on success."""
+    async with TestSession() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+
 @pytest.fixture
 async def client():
     """Async HTTP client with DB dependency override."""
 
-    async def override_get_db():
-        async with TestSession() as session:
-            try:
-                yield session
-                await session.commit()
-            except Exception:
-                await session.rollback()
-                raise
-
-    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_db] = _override_get_db
     transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+async def public_peer_client():
+    """Like ``client`` but the socket peer is a PUBLIC address.
+
+    The default ASGI transport peer is 127.0.0.1 (loopback — the trusted
+    private path). This fixture models the other topology: the app
+    reachable without Fly's proxy (direct exposure / non-Fly deploy),
+    where the true client is on the socket and ``Fly-Client-IP`` must be
+    ignored.
+    """
+
+    app.dependency_overrides[get_db] = _override_get_db
+    transport = ASGITransport(app=app, client=("93.184.216.34", 123))
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
     app.dependency_overrides.clear()

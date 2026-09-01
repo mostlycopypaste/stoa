@@ -15,6 +15,7 @@ anonymous traffic cannot bypass rate limiting.
 """
 
 import hashlib
+import ipaddress
 import logging
 import time
 from collections import defaultdict, deque
@@ -124,21 +125,61 @@ def _is_public_read_path(path: str) -> bool:
     return path == PUBLIC_PATH_PREFIX or path.startswith(f"{PUBLIC_PATH_PREFIX}/")
 
 
-def _extract_client_ip(request: Request) -> str | None:
-    """Best-effort client IP for unauthenticated rate limiting.
+def _peer_host_is_private(host: str | None) -> bool:
+    """True when the socket peer itself is a private/loopback address.
 
-    Behind Fly.io the socket peer is the edge proxy, not the client;
-    Fly injects the true client address as ``Fly-Client-IP``. Direct/local
-    requests fall back to the socket peer. Uvicorn runs without proxy
-    headers enabled, so ``request.client.host`` alone would collapse all
-    anonymous readers into one shared bucket in production.
+    Connections forwarded through the Fly proxy arrive over Fly's
+    private network (6PN, ``fd7a:115c:a1e0::/48`` — a unique-local
+    range), and local development arrives over loopback. A public peer
+    means the app is seeing the client itself — no proxy in between.
+    Unparseable peers (e.g. test transports' ``testclient``) are treated
+    as public: trust defaults to closed.
     """
-    fly_ip = request.headers.get("fly-client-ip")
-    if fly_ip:
-        return fly_ip
-    if request.client is not None:
-        return request.client.host
-    return None
+    if host is None:
+        return False
+    try:
+        peer = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return peer.is_private or peer.is_loopback
+
+
+def _extract_client_ip(request: Request) -> str | None:
+    """Client IP for unauthenticated rate limiting — topology-aware.
+
+    Two candidate sources with different trust properties:
+
+    - ``Fly-Client-IP``: set by Fly's HTTP handler to "The IP address of
+      the client from the perspective of Fly Proxy"
+      (https://fly.io/docs/networking/request-headers/; also
+      https://fly.io/docs/networking/services/: "The IP address Fly.io
+      accepted a connection from"). No written guarantee could be found
+      that the edge strips a client-supplied value of this header, so it
+      is honored only when the connection itself arrives from a private
+      address — which is how Fly's proxy forwards traffic to machines
+      (over Fly's private network), and also covers loopback in local
+      dev. On that path the socket peer is the proxy, not the client,
+      so peer-keyed buckets would collapse all anonymous readers into
+      one shared bucket.
+    - the socket peer: the only value the app observes directly. When
+      the peer is public — the app reachable without Fly's proxy
+      (direct exposure, a non-Fly deployment, or any future topology) —
+      ``Fly-Client-IP`` is untrusted by construction: a client could
+      set it per request and mint fresh limiter buckets, so it is
+      ignored entirely and we key on the peer.
+
+    Consequence: header rotation can never mint buckets on any topology
+    where the app sees the true peer; on the Fly-proxy path the limiter
+    trusts the documented proxy-set header (if the edge ever stopped
+    setting it, buckets degrade to per-proxy — fail-closed for
+    limiting, fail-safe for readers).
+    """
+    peer = request.client.host if request.client is not None else None
+    if peer is not None and _peer_host_is_private(peer):
+        fly_ip = request.headers.get("fly-client-ip")
+        if fly_ip:
+            return fly_ip
+    return peer
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
