@@ -4,12 +4,14 @@ import os
 from unittest.mock import patch
 
 import pytest
+from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
 from stoa.database import get_db
 from stoa.main import app
 from stoa.models import AuditLog
+from stoa.routes.admin import require_admin
 
 from .conftest import TestSession
 
@@ -44,6 +46,27 @@ class TestAdminAuth:
     async def test_invalid_admin_key_returns_401(self, admin_client: AsyncClient) -> None:
         response = await admin_client.get("/api/admin/stats", headers={"X-Admin-Key": "wrong"})
         assert response.status_code == 401
+
+    async def test_non_ascii_admin_key_returns_401_not_500(self) -> None:
+        """Issue #88: secrets.compare_digest raises TypeError on non-ASCII input.
+
+        A client sending a header with a Unicode character (e.g. en-dash pasted
+        in place of ASCII hyphen) must receive a clean 401, not a 500.
+        Call require_admin directly because HTTP headers are ASCII-only at the
+        transport layer; the non-ASCII string reaches the function when
+        Starlette decodes latin-1 encoded header bytes.
+        """
+        with patch.dict(os.environ, {"ADMIN_KEY": "valid-admin-key-for-testing-here"}):
+            with pytest.raises(HTTPException) as exc_info:
+                require_admin(x_admin_key="bad\u2013key")
+            assert exc_info.value.status_code == 401
+
+    async def test_emoji_admin_key_returns_401_not_500(self) -> None:
+        """Issue #88: emoji in X-Admin-Key must not raise TypeError -> 500."""
+        with patch.dict(os.environ, {"ADMIN_KEY": "valid-admin-key-for-testing-here"}):
+            with pytest.raises(HTTPException) as exc_info:
+                require_admin(x_admin_key="\U0001f511secret")
+            assert exc_info.value.status_code == 401
 
     async def test_no_env_var_returns_401(self) -> None:
         async def override_get_db():
