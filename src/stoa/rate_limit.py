@@ -144,6 +144,23 @@ def _peer_host_is_private(host: str | None) -> bool:
     return peer.is_private or peer.is_loopback
 
 
+def _parse_client_ip(value: str) -> str | None:
+    """Parse a client-IP header value; ``None`` if it is not a single IP.
+
+    Parse before use: whatever this returns becomes a limiter bucket
+    key, so an address must be validated before it is an identity, not
+    merely before it is logged. A multi-valued header (an edge that
+    appends rather than overwrites), an IPv4:port pair, or any other
+    non-IP string reads as "no header" — the limiter then falls back
+    to the socket peer, which is fail-closed: anonymous readers share
+    the proxy bucket rather than a forged value minting fresh ones.
+    """
+    try:
+        return str(ipaddress.ip_address(value.strip()))
+    except ValueError:
+        return None
+
+
 def _extract_client_ip(request: Request) -> str | None:
     """Client IP for unauthenticated rate limiting — topology-aware.
 
@@ -178,7 +195,9 @@ def _extract_client_ip(request: Request) -> str | None:
     if peer is not None and _peer_host_is_private(peer):
         fly_ip = request.headers.get("fly-client-ip")
         if fly_ip:
-            return fly_ip
+            parsed = _parse_client_ip(fly_ip)
+            if parsed is not None:
+                return parsed
     return peer
 
 

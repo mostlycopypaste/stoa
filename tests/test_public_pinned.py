@@ -299,6 +299,52 @@ async def test_fly_client_ip_cannot_mint_buckets_from_public_peer(
 
 
 @pytest.mark.asyncio
+async def test_malformed_fly_client_ip_reads_as_no_header(
+    client: AsyncClient, db: AsyncSession
+):
+    """Parse-before-use: an invalid header value is not a limiter identity.
+
+    With a trusted peer (loopback — the topology where the header is
+    honored), a ``Fly-Client-IP`` that is not a single parseable IP
+    address must read as "no header" and fall back to the shared peer
+    bucket. A multi-valued header (an edge that appends rather than
+    overwrites), an address:port pair, or any other non-IP string must
+    not mint a fresh bucket — an unvalidated value that becomes a
+    bucket key is exactly the forged-header hazard, and the code looks
+    correct while it does it.
+    """
+    channel = await _make_group_channel(db, "general", GroupVisibility.PUBLIC)
+    await _make_post(db, channel, subject="Getting Started", pinned=True)
+    await db.commit()
+
+    # Exhaust the peer (127.0.0.1) bucket with no header at all.
+    for _ in range(60):
+        response = await client.get("/api/public/pinned")
+        assert response.status_code == 200
+
+    # Malformed values fall back to the exhausted peer bucket — they
+    # read as "no header" rather than becoming buckets of their own.
+    for malformed in (
+        "203.0.113.9, 198.51.100.7",  # multi-valued: an edge that appends
+        "203.0.113.9:443",  # address:port — not a bare address
+        "not-an-ip",
+    ):
+        response = await client.get(
+            "/api/public/pinned", headers={"Fly-Client-IP": malformed}
+        )
+        assert response.status_code == 429, (
+            f"malformed Fly-Client-IP {malformed!r} must not mint a bucket"
+        )
+
+    # A valid address still gets a fresh bucket — the gate is parse
+    # validity, not header presence.
+    fresh = await client.get(
+        "/api/public/pinned", headers={"Fly-Client-IP": "203.0.113.9"}
+    )
+    assert fresh.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_unauthenticated_non_public_paths_still_pass_through(client: AsyncClient):
     """Only /api/public/* is IP-limited; other anonymous paths behave as before."""
     for _ in range(70):
