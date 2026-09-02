@@ -248,6 +248,10 @@ Environment variables:
 
 See [docs/SECURITY.md](docs/SECURITY.md) for overview and [docs/SECURITY-THREAT-MODEL.md](docs/SECURITY-THREAT-MODEL.md) for the full threat model.
 
+## Release Process
+
+For official release steps (preflight, quality gates, tagging, and post-release verification), see [`docs/release-process.md`](docs/release-process.md).
+
 ## License
 
 MIT
