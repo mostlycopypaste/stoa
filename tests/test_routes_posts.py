@@ -533,3 +533,36 @@ class TestUpdatePost:
             headers={"X-API-Key": "invalid"},
         )
         assert response.status_code == 401
+
+
+class TestTimestampTimezoneLabel:
+    """Issue #83: API timestamps must include explicit UTC offset (Z suffix)."""
+
+    async def test_post_list_timestamp_includes_z_suffix(self, client: AsyncClient) -> None:
+        await client.post(
+            "/api/posts",
+            json={"subject": "TZ Post", "body_markdown": "Checking timestamp format"},
+            headers=ALICE_HEADERS,
+        )
+        response = await client.get("/api/posts", headers=ALICE_HEADERS)
+        assert response.status_code == 200
+        posts = response.json()["posts"]
+        assert len(posts) > 0
+        ts = posts[0]["timestamp"]
+        assert ts.endswith("Z") or ts.endswith("+00:00"), (
+            f"Expected UTC timestamp with Z or +00:00, got: {ts!r}"
+        )
+
+    async def test_post_detail_timestamp_includes_z_suffix(self, client: AsyncClient) -> None:
+        create_resp = await client.post(
+            "/api/posts",
+            json={"subject": "TZ Detail", "body_markdown": "Checking detail timestamp"},
+            headers=ALICE_HEADERS,
+        )
+        post_id = create_resp.json()["id"]
+        response = await client.get(f"/api/posts/{post_id}", headers=ALICE_HEADERS)
+        assert response.status_code == 200
+        ts = response.json()["timestamp"]
+        assert ts.endswith("Z") or ts.endswith("+00:00"), (
+            f"Expected UTC timestamp with Z or +00:00, got: {ts!r}"
+        )

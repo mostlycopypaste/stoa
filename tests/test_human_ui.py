@@ -787,3 +787,94 @@ async def test_group_detail_lists_members_linking_to_profiles(
     assert response.status_code == 200
     assert "Orator" in response.text
     assert f"/ui/agents/{agent.id}" in response.text
+
+
+# --- Issue #83: timestamps must display a UTC label ---
+
+
+@pytest.mark.asyncio
+async def test_channel_timestamps_display_utc_label(client: AsyncClient, db: AsyncSession):
+    """Issue #83: channel post timestamps must include a UTC label."""
+    await _create_verified_human(db)
+    group = Group(name="TZ Group", description="tz test", visibility=GroupVisibility.PUBLIC)
+    db.add(group)
+    await db.flush()
+    channel = Channel(name="tz-test", description="timezone test", group_id=group.id)
+    db.add(channel)
+    await db.flush()
+    post = Post(
+        author="alice@herd.ai",
+        subject="TZ Test Post",
+        tldr="timezone check",
+        body_markdown="body",
+        body_html="<p>body</p>",
+        channel_id=channel.id,
+    )
+    db.add(post)
+    await db.commit()
+
+    await _login(client)
+    response = await client.get(f"/ui/channels/{channel.id}")
+    assert response.status_code == 200
+    assert "UTC" in response.text
+
+
+@pytest.mark.asyncio
+async def test_post_detail_timestamp_displays_utc_label(client: AsyncClient, db: AsyncSession):
+    """Issue #83: post detail page timestamp must include a UTC label."""
+    await _create_verified_human(db)
+    group = Group(name="TZ Group 2", description="tz test", visibility=GroupVisibility.PUBLIC)
+    db.add(group)
+    await db.flush()
+    channel = Channel(name="tz-test-2", description="timezone test", group_id=group.id)
+    db.add(channel)
+    await db.flush()
+    post = Post(
+        author="alice@herd.ai",
+        subject="TZ Detail Post",
+        tldr="timezone detail check",
+        body_markdown="body",
+        body_html="<p>body</p>",
+        channel_id=channel.id,
+    )
+    db.add(post)
+    await db.commit()
+
+    await _login(client)
+    response = await client.get(f"/ui/posts/{post.id}")
+    assert response.status_code == 200
+    assert "UTC" in response.text
+
+
+@pytest.mark.asyncio
+async def test_agent_profile_timestamps_display_utc_label(client: AsyncClient, db: AsyncSession):
+    """Issue #83: agent profile recent activity timestamps must include a UTC label."""
+    from sqlalchemy import select as sa_select
+
+    from stoa.models import Agent as AgentModel
+
+    await _create_verified_human(db)
+    group = Group(name="TZ Group 3", description="tz test", visibility=GroupVisibility.PUBLIC)
+    db.add(group)
+    await db.flush()
+    channel = Channel(name="tz-test-3", description="timezone test", group_id=group.id)
+    db.add(channel)
+    await db.flush()
+
+    # alice already seeded by conftest
+    result = await db.execute(sa_select(AgentModel).where(AgentModel.agent_email == "alice@herd.ai"))
+    agent = result.scalar_one()
+    db.add(Post(
+        author="alice@herd.ai",
+        subject="TZ Profile Post",
+        tldr="timezone profile check",
+        body_markdown="body",
+        body_html="<p>body</p>",
+        channel_id=channel.id,
+    ))
+    await db.commit()
+
+    await _login(client)
+    response = await client.get(f"/ui/agents/{agent.id}")
+    assert response.status_code == 200
+    assert "UTC" in response.text
