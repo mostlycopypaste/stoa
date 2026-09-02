@@ -1,44 +1,50 @@
 #!/usr/bin/env bash
-# Generate CHANGELOG.md from conventional commit messages.
-# Usage: ./scripts/generate-changelog.sh [from-tag] [to-tag]
+# Generate markdown release notes from conventional-commit SUBJECT lines.
+# Usage: ./scripts/generate-changelog.sh [from-tag] [to-ref] [output-file]
 
 set -euo pipefail
 
 FROM_TAG=${1:-$(git describe --tags --abbrev=0 2>/dev/null || echo "")}
-TO_TAG=${2:-HEAD}
+TO_REF=${2:-HEAD}
+OUT_FILE=${3:-CHANGELOG.md}
+DATE_STR=$(date +%Y-%m-%d)
 
 if [ -z "$FROM_TAG" ]; then
-    echo "No previous tag found — generating full changelog from first commit"
-    FROM_TAG=$(git rev-list --max-parents=0 HEAD)
+  echo "No previous tag found — generating changelog from initial commit"
+  FROM_TAG=$(git rev-list --max-parents=0 "$TO_REF")
 fi
 
-echo "Generating changelog from $FROM_TAG to $TO_TAG..."
+echo "Generating changelog from $FROM_TAG to $TO_REF -> $OUT_FILE..."
+
+COMMITS=$(git log --format='%h %s' "$FROM_TAG..$TO_REF")
+
+section() {
+  local title="$1"
+  local pattern="$2"
+  local lines
+  lines=$(printf '%s\n' "$COMMITS" | grep -E "$pattern" || true)
+  if [ -n "$lines" ]; then
+    echo "## $title"
+    echo
+    printf '%s\n' "$lines" | sed 's/^/- /'
+    echo
+  fi
+}
 
 {
-    echo "# Changelog"
-    echo ""
-    echo "Generated on $(date +%Y-%m-%d)"
-    echo ""
+  echo "# Changelog"
+  echo
+  echo "Generated on $DATE_STR"
+  echo
 
-    # Group by type
-    for TYPE in feat fix docs chore refactor test ci; do
-        COMMITS=$(git log --oneline "$FROM_TAG..$TO_TAG" --grep="^$TYPE" --perl-regexp 2>/dev/null || echo "")
-        if [ -n "$COMMITS" ]; then
-            case $TYPE in
-                feat) HEADER="## Features" ;;
-                fix) HEADER="## Bug Fixes" ;;
-                docs) HEADER="## Documentation" ;;
-                chore) HEADER="## Chores" ;;
-                refactor) HEADER="## Refactoring" ;;
-                test) HEADER="## Tests" ;;
-                ci) HEADER="## CI/CD" ;;
-            esac
-            echo "$HEADER"
-            echo ""
-            echo "$COMMITS" | sed 's/^/- /'
-            echo ""
-        fi
-    done
-} > CHANGELOG.md
+  # Match against subject prefixes only; avoid body-based false matches.
+  section "Features" '^[0-9a-f]+ feat(\(|:).*'
+  section "Bug Fixes" '^[0-9a-f]+ fix(\(|:).*'
+  section "Documentation" '^[0-9a-f]+ docs(\(|:).*'
+  section "Refactoring" '^[0-9a-f]+ refactor(\(|:).*'
+  section "Tests" '^[0-9a-f]+ test(\(|:).*'
+  section "CI/CD" '^[0-9a-f]+ ci(\(|:).*'
+  section "Chores" '^[0-9a-f]+ chore(\(|:).*'
+} > "$OUT_FILE"
 
-echo "✓ Generated CHANGELOG.md"
+echo "✓ Generated $OUT_FILE"

@@ -299,9 +299,7 @@ async def test_fly_client_ip_cannot_mint_buckets_from_public_peer(
 
 
 @pytest.mark.asyncio
-async def test_malformed_fly_client_ip_reads_as_no_header(
-    client: AsyncClient, db: AsyncSession
-):
+async def test_malformed_fly_client_ip_reads_as_no_header(client: AsyncClient, db: AsyncSession):
     """Parse-before-use: an invalid header value is not a limiter identity.
 
     With a trusted peer (loopback — the topology where the header is
@@ -329,18 +327,14 @@ async def test_malformed_fly_client_ip_reads_as_no_header(
         "203.0.113.9:443",  # address:port — not a bare address
         "not-an-ip",
     ):
-        response = await client.get(
-            "/api/public/pinned", headers={"Fly-Client-IP": malformed}
-        )
+        response = await client.get("/api/public/pinned", headers={"Fly-Client-IP": malformed})
         assert response.status_code == 429, (
             f"malformed Fly-Client-IP {malformed!r} must not mint a bucket"
         )
 
     # A valid address still gets a fresh bucket — the gate is parse
     # validity, not header presence.
-    fresh = await client.get(
-        "/api/public/pinned", headers={"Fly-Client-IP": "203.0.113.9"}
-    )
+    fresh = await client.get("/api/public/pinned", headers={"Fly-Client-IP": "203.0.113.9"})
     assert fresh.status_code == 200
 
 
