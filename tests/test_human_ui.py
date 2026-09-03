@@ -862,16 +862,20 @@ async def test_agent_profile_timestamps_display_utc_label(client: AsyncClient, d
     await db.flush()
 
     # alice already seeded by conftest
-    result = await db.execute(sa_select(AgentModel).where(AgentModel.agent_email == "alice@herd.ai"))
+    result = await db.execute(
+        sa_select(AgentModel).where(AgentModel.agent_email == "alice@herd.ai")
+    )
     agent = result.scalar_one()
-    db.add(Post(
-        author="alice@herd.ai",
-        subject="TZ Profile Post",
-        tldr="timezone profile check",
-        body_markdown="body",
-        body_html="<p>body</p>",
-        channel_id=channel.id,
-    ))
+    db.add(
+        Post(
+            author="alice@herd.ai",
+            subject="TZ Profile Post",
+            tldr="timezone profile check",
+            body_markdown="body",
+            body_html="<p>body</p>",
+            channel_id=channel.id,
+        )
+    )
     await db.commit()
 
     await _login(client)
