@@ -241,21 +241,28 @@ async def test_detail_404_for_everything_not_publicly_readable(
 
 
 @pytest.mark.asyncio
-async def test_public_reads_are_rate_limited_per_ip(client: AsyncClient, db: AsyncSession):
+async def test_public_reads_are_rate_limited_per_ip(
+    client: AsyncClient, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+):
     """Unauthenticated /api/public/* traffic is throttled per client IP.
 
     The fixture's ASGI transport peer is 127.0.0.1 — a private address,
     which is the topology where ``Fly-Client-IP`` is honored (connections
     arrive through a private network: Fly's proxy in prod, loopback here).
     """
+    import stoa.rate_limit as rl_mod
+
+    limit = 3
+    monkeypatch.setattr(rl_mod._limiter, "max_requests", limit)
+
     channel = await _make_group_channel(db, "general", GroupVisibility.PUBLIC)
     await _make_post(db, channel, subject="Getting Started", pinned=True)
     await db.commit()
 
     # Same anonymous client (no key headers) exhausts its IP bucket.
-    responses = [await client.get("/api/public/pinned") for _ in range(65)]
+    responses = [await client.get("/api/public/pinned") for _ in range(limit + 1)]
     assert responses[-1].status_code == 429
-    assert responses[-1].json()["limit"] == 60
+    assert responses[-1].json()["limit"] == limit
     # No raw address material in the throttle response
     assert "127.0.0.1" not in responses[-1].text
 
@@ -270,7 +277,7 @@ async def test_public_reads_are_rate_limited_per_ip(client: AsyncClient, db: Asy
 
 @pytest.mark.asyncio
 async def test_fly_client_ip_cannot_mint_buckets_from_public_peer(
-    public_peer_client: AsyncClient, db: AsyncSession
+    public_peer_client: AsyncClient, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ):
     """Direct-exposure topology: header rotation must not mint limiter buckets.
 
@@ -279,11 +286,16 @@ async def test_fly_client_ip_cannot_mint_buckets_from_public_peer(
     construction: every request keys on the true peer no matter what the
     header says, so rotating it cannot escape the bucket.
     """
+    import stoa.rate_limit as rl_mod
+
+    limit = 3
+    monkeypatch.setattr(rl_mod._limiter, "max_requests", limit)
+
     channel = await _make_group_channel(db, "general", GroupVisibility.PUBLIC)
     await _make_post(db, channel, subject="Getting Started", pinned=True)
     await db.commit()
 
-    for _ in range(60):
+    for _ in range(limit):
         response = await public_peer_client.get("/api/public/pinned")
         assert response.status_code == 200
 
@@ -299,7 +311,9 @@ async def test_fly_client_ip_cannot_mint_buckets_from_public_peer(
 
 
 @pytest.mark.asyncio
-async def test_malformed_fly_client_ip_reads_as_no_header(client: AsyncClient, db: AsyncSession):
+async def test_malformed_fly_client_ip_reads_as_no_header(
+    client: AsyncClient, db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+):
     """Parse-before-use: an invalid header value is not a limiter identity.
 
     With a trusted peer (loopback — the topology where the header is
@@ -311,12 +325,17 @@ async def test_malformed_fly_client_ip_reads_as_no_header(client: AsyncClient, d
     bucket key is exactly the forged-header hazard, and the code looks
     correct while it does it.
     """
+    import stoa.rate_limit as rl_mod
+
+    limit = 3
+    monkeypatch.setattr(rl_mod._limiter, "max_requests", limit)
+
     channel = await _make_group_channel(db, "general", GroupVisibility.PUBLIC)
     await _make_post(db, channel, subject="Getting Started", pinned=True)
     await db.commit()
 
     # Exhaust the peer (127.0.0.1) bucket with no header at all.
-    for _ in range(60):
+    for _ in range(limit):
         response = await client.get("/api/public/pinned")
         assert response.status_code == 200
 
@@ -378,3 +397,53 @@ def test_peer_host_is_private() -> None:
     assert not _peer_host_is_private("93.184.216.34")  # public
     assert not _peer_host_is_private("testclient")  # unparseable → untrusted
     assert not _peer_host_is_private(None)
+
+
+@pytest.mark.asyncio
+async def test_none_peer_on_public_path_logs_warning(
+    db: AsyncSession, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Issue #85: peerless request on a public path must log a warning.
+
+    When request.client is None (certain ASGI transports), _extract_client_ip
+    returns None and the request passes unthrottled. That is acceptable
+    fail-open behaviour, but the gap must be visible in prod telemetry —
+    a silent pass-through is operationally invisible.
+    """
+    import logging
+
+    from httpx import ASGITransport, AsyncClient
+
+    from stoa.database import get_db
+    from stoa.main import app
+    from tests.conftest import TestSession
+
+    channel = await _make_group_channel(db, "general", GroupVisibility.PUBLIC)
+    await _make_post(db, channel, subject="No-Peer Post", pinned=True)
+    await db.commit()
+
+    async def override_get_db():
+        async with TestSession() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+
+    app.dependency_overrides[get_db] = override_get_db
+    # client=None simulates a peerless ASGI transport
+    transport = ASGITransport(app=app, client=None)
+    try:
+        with caplog.at_level(logging.WARNING, logger="stoa.rate_limit"):
+            async with AsyncClient(transport=transport, base_url="http://test") as peerless:
+                response = await peerless.get("/api/public/pinned")
+        assert response.status_code == 200  # fail-open: request passes
+        assert (
+            "unknown" in caplog.text.lower()
+            or "no client" in caplog.text.lower()
+            or "client ip" in caplog.text.lower()
+            or "unidentifiable" in caplog.text.lower()
+        ), f"Expected a warning about missing client IP, got log: {caplog.text!r}"
+    finally:
+        app.dependency_overrides.clear()

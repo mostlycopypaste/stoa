@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from httpx import AsyncClient
 
-from stoa.rate_limit import RateLimiter, _identity_label, _is_admin_path
+from stoa.rate_limit import RateLimiter, _identity_label, _is_admin_path, _parse_client_ip
 
 HEADERS = {"X-API-Key": "alice-key"}
 
@@ -179,3 +179,52 @@ class TestAdminBypassScope:
         events = [c for c in mock_audit.call_args_list if c.args[0] == "admin_key_request"]
         assert len(events) == 1
         assert events[0].kwargs["details"]["rate_limit_bypassed"] is False
+
+
+class TestParseClientIp:
+    """Unit tests for _parse_client_ip — issue #85."""
+
+    def test_valid_ipv4_returns_string(self) -> None:
+        assert _parse_client_ip("203.0.113.9") == "203.0.113.9"
+
+    def test_valid_ipv6_returns_string(self) -> None:
+        assert _parse_client_ip("2001:db8::1") == "2001:db8::1"
+
+    def test_ipv4_mapped_ipv6_unwrapped_to_ipv4(self) -> None:
+        """Issue #85: ::ffff:203.0.113.9 and 203.0.113.9 must share a bucket.
+
+        Without unwrapping, the two representations key different buckets —
+        a client behind a proxy that normalises to IPv4-mapped form gets a
+        fresh bucket each time it switches representation (up to 2×, bounded
+        but inconsistent).
+        """
+        result = _parse_client_ip("::ffff:203.0.113.9")
+        assert result == "203.0.113.9", (
+            f"IPv4-mapped address should be unwrapped to '203.0.113.9', got {result!r}"
+        )
+
+    def test_scoped_ipv6_rejected(self) -> None:
+        """Issue #85: fe80::1%eth0 must not pass through with scope ID intact.
+
+        A scoped link-local address can never be an edge-observed client IP.
+        Passing it through lets %eth0 survive into the bucket key, which is
+        both wrong (link-locals aren't routable client IPs) and a surface for
+        key manipulation.
+        """
+        result = _parse_client_ip("fe80::1%eth0")
+        assert result is None, f"Scoped IPv6 address should be rejected (None), got {result!r}"
+
+    def test_multi_valued_header_rejected(self) -> None:
+        assert _parse_client_ip("203.0.113.9, 198.51.100.7") is None
+
+    def test_address_port_rejected(self) -> None:
+        assert _parse_client_ip("203.0.113.9:443") is None
+
+    def test_garbage_rejected(self) -> None:
+        assert _parse_client_ip("not-an-ip") is None
+
+    def test_empty_string_rejected(self) -> None:
+        assert _parse_client_ip("") is None
+
+    def test_whitespace_stripped_before_parse(self) -> None:
+        assert _parse_client_ip("  203.0.113.9  ") == "203.0.113.9"

@@ -154,11 +154,26 @@ def _parse_client_ip(value: str) -> str | None:
     non-IP string reads as "no header" — the limiter then falls back
     to the socket peer, which is fail-closed: anonymous readers share
     the proxy bucket rather than a forged value minting fresh ones.
+
+    Normalisation:
+    - IPv4-mapped IPv6 (::ffff:x.x.x.x) is unwrapped to plain IPv4 so
+      both representations share a bucket (issue #85).
+    - Scoped addresses (fe80::1%eth0) are rejected: scope IDs survive
+      str() and contaminate bucket keys, and link-locals can never be
+      edge-observed client IPs (issue #85).
     """
     try:
-        return str(ipaddress.ip_address(value.strip()))
+        ip = ipaddress.ip_address(value.strip())
     except ValueError:
         return None
+    # Reject scoped addresses — scope IDs survive str() and are not valid
+    # edge-observed client identifiers.
+    if isinstance(ip, ipaddress.IPv6Address) and ip.scope_id:
+        return None
+    # Unwrap IPv4-mapped IPv6 so ::ffff:x.x.x.x and x.x.x.x share a bucket.
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        return str(ip.ipv4_mapped)
+    return str(ip)
 
 
 def _extract_client_ip(request: Request) -> str | None:
@@ -212,6 +227,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 client_ip = _extract_client_ip(request)
                 if client_ip is not None:
                     key = f"ip:{client_ip}"
+                else:
+                    logger.warning(
+                        "rate_limit: unidentifiable client on public path %s "
+                        "(no peer, no valid Fly-Client-IP) — passing unthrottled",
+                        request.url.path,
+                    )
             if key is None:
                 return await call_next(request)
 
