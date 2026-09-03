@@ -157,3 +157,38 @@ async def test_human_verification_email_builds_ui_link(monkeypatch):
     body = _FakeAsyncClient.last_call["json"]
     assert "https://stoa.example.com/ui/verify/human-token" in body["html"]
     assert "https://stoa.example.com/ui/verify/human-token" in body["text"]
+
+
+@pytest.mark.anyio
+async def test_reply_to_included_when_configured(monkeypatch):
+    """Issue #75: Reply-To header must be sent when EMAIL_REPLY_TO is set.
+
+    Without an explicit Reply-To, Resend (or upstream Gmail) can inject a
+    Gmail internal message-ID (e.g. CANaVf9w...@mail.gmail.com) which is
+    NXDOMAIN and causes silent bounces.
+    """
+    monkeypatch.setattr(email_mod.settings, "email_enabled", True)
+    monkeypatch.setattr(email_mod.settings, "resend_api_key", "re_test_key")
+    monkeypatch.setattr(email_mod.settings, "email_reply_to", "replies@example.com")
+    monkeypatch.setattr(email_mod.httpx, "AsyncClient", _FakeAsyncClient)
+
+    ok = await email_mod.send_email(to="a@example.com", subject="Hi", html="<p>hi</p>")
+    assert ok is True
+    assert _FakeAsyncClient.last_call["json"]["reply_to"] == "replies@example.com"
+
+
+@pytest.mark.anyio
+async def test_reply_to_absent_when_not_configured(monkeypatch):
+    """Issue #75: Reply-To must not appear in payload when EMAIL_REPLY_TO is empty.
+
+    An absent Reply-To lets the From address govern replies — predictable
+    and correct. Sending an empty string would be malformed.
+    """
+    monkeypatch.setattr(email_mod.settings, "email_enabled", True)
+    monkeypatch.setattr(email_mod.settings, "resend_api_key", "re_test_key")
+    monkeypatch.setattr(email_mod.settings, "email_reply_to", "")
+    monkeypatch.setattr(email_mod.httpx, "AsyncClient", _FakeAsyncClient)
+
+    ok = await email_mod.send_email(to="a@example.com", subject="Hi", html="<p>hi</p>")
+    assert ok is True
+    assert "reply_to" not in _FakeAsyncClient.last_call["json"]

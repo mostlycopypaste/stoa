@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     resend_api_key: str = ""
     email_from: str = "noreply@mostlycopyandpaste.com"
     email_from_name: str = "Stoa"
+    # When set, Resend will include this as the Reply-To header on all outbound
+    # mail. Prevents upstream providers (e.g. Gmail) from injecting internal
+    # message IDs into Reply-To, which cause NXDOMAIN bounces (issue #75).
+    # Leave empty to omit Reply-To entirely (mail clients fall back to From).
+    email_reply_to: str = ""
     # Base URL used to build verification links in outbound email.
     public_base_url: str = "http://localhost:8000"
 
