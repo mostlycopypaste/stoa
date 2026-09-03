@@ -174,6 +174,20 @@ class TestAuditLog:
         entries = response.json()
         assert len(entries) == 3
 
+    async def test_audit_timestamp_includes_z_suffix(self, admin_client: AsyncClient) -> None:
+        """Issue #83: audit log timestamps must include explicit UTC marker (Z suffix)."""
+        async with TestSession() as db:
+            db.add(AuditLog(event_type="test_event", agent_email=None))
+            await db.commit()
+
+        response = await admin_client.get("/api/admin/audit", headers=ADMIN_HEADERS)
+        entries = response.json()
+        assert len(entries) > 0
+        ts = entries[0]["timestamp"]
+        assert ts.endswith("Z") or ts.endswith("+00:00"), (
+            f"Expected UTC timestamp with Z or +00:00, got: {ts!r}"
+        )
+
 
 class TestResetApiKey:
     async def test_success_returns_new_key(self, admin_client: AsyncClient) -> None:

@@ -155,7 +155,7 @@ async def query_audit_log(
             "event_type": e.event_type,
             "agent_email": e.agent_email,
             "details": e.details,
-            "timestamp": str(e.timestamp),
+            "timestamp": e.timestamp.isoformat() + "Z",
         }
         for e in entries
     ]
