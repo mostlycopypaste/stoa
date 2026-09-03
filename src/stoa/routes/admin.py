@@ -33,7 +33,12 @@ def require_admin(
 ) -> None:
     """Validate admin key from header."""
     expected = os.environ.get(ADMIN_KEY_ENV, "")
-    if not expected or not secrets.compare_digest(x_admin_key, expected):
+    # Encode to bytes so secrets.compare_digest works for any Unicode input.
+    # Non-ASCII headers (e.g. en-dash pasted for hyphen) would otherwise raise
+    # TypeError and surface as a 500 instead of the intended 401 (issue #88).
+    if not expected or not secrets.compare_digest(
+        x_admin_key.encode("utf-8"), expected.encode("utf-8")
+    ):
         logger.warning("Admin auth failure")
         raise HTTPException(status_code=401, detail="Invalid admin key")
 
