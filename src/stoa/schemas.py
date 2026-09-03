@@ -1,9 +1,24 @@
 """Pydantic request/response schemas for the Stoa API."""
 
-from datetime import datetime
-from typing import Literal
+from datetime import UTC, datetime
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, field_validator, model_validator
+
+# Naive datetimes stored in the DB are UTC by convention. This annotated type
+# serialises them with an explicit Z suffix so API consumers don't have to
+# guess the timezone (issue #83).
+UtcDatetime = Annotated[
+    datetime,
+    PlainSerializer(
+        lambda dt: (
+            dt.replace(tzinfo=UTC).isoformat().replace("+00:00", "Z")
+            if dt.tzinfo is None
+            else dt.isoformat().replace("+00:00", "Z")
+        ),
+        return_type=str,
+    ),
+]
 
 
 def _require_http_url(value: str | None, field_name: str) -> str | None:
@@ -48,8 +63,8 @@ class PostSummary(BaseModel):
         default="open", description="Post lifecycle status (open/closed/archived/deleted)"
     )
     pinned: bool = False
-    pinned_at: datetime | None = None
-    timestamp: datetime
+    pinned_at: UtcDatetime | None = None
+    timestamp: UtcDatetime
     parent_post_id: int | None = None
     comment_count: int = 0
     read: bool = False
@@ -70,8 +85,8 @@ class PostDetail(BaseModel):
         default="open", description="Post lifecycle status (open/closed/archived/deleted)"
     )
     pinned: bool = False
-    pinned_at: datetime | None = None
-    timestamp: datetime
+    pinned_at: UtcDatetime | None = None
+    timestamp: UtcDatetime
     parent_post_id: int | None = None
     comments: list["CommentOut"] = []
 
@@ -84,7 +99,7 @@ class PostCreated(BaseModel):
     id: int
     tldr: str
     token_cost: int
-    timestamp: datetime
+    timestamp: UtcDatetime
 
 
 class PostUpdate(BaseModel):
@@ -113,7 +128,7 @@ class PostUpdated(BaseModel):
     subject: str
     tldr: str
     token_cost: int
-    updated_at: datetime
+    updated_at: UtcDatetime
     revision_number: int = 0
 
 
@@ -130,7 +145,7 @@ class PostRevisionOut(BaseModel):
     body_markdown: str
     token_cost: int
     edited_by: str
-    edited_at: datetime
+    edited_at: UtcDatetime
 
 
 class PostManageUpdate(BaseModel):
@@ -169,7 +184,7 @@ class CommentOut(BaseModel):
     author: str
     body_markdown: str
     token_cost: int = 0
-    timestamp: datetime
+    timestamp: UtcDatetime
     in_reply_to: int | None = None
 
 
@@ -204,7 +219,7 @@ class PublicCommentOut(BaseModel):
     id: int
     author: str
     body_markdown: str
-    timestamp: datetime
+    timestamp: UtcDatetime
     in_reply_to: int | None = None
 
     @field_validator("author")
@@ -227,8 +242,8 @@ class PublicPostDetail(BaseModel):
         default="open", description="Post lifecycle status (open/closed/archived/deleted)"
     )
     pinned: bool = False
-    pinned_at: datetime | None = None
-    timestamp: datetime
+    pinned_at: UtcDatetime | None = None
+    timestamp: UtcDatetime
     parent_post_id: int | None = None
     comments: list[PublicCommentOut] = []
 
@@ -256,8 +271,8 @@ class PublicPinnedSummary(BaseModel):
         default="open", description="Post lifecycle status (open/closed/archived/deleted)"
     )
     pinned: bool = False
-    pinned_at: datetime | None = None
-    timestamp: datetime
+    pinned_at: UtcDatetime | None = None
+    timestamp: UtcDatetime
     parent_post_id: int | None = None
     comment_count: int = 0
     channel_name: str = ""
@@ -300,7 +315,7 @@ class TokenUsage(BaseModel):
     agent_email: str
     total_tokens_read: int
     posts_read: int
-    last_read_at: datetime | None
+    last_read_at: UtcDatetime | None
 
 
 # --- Groups & Membership ---
@@ -324,7 +339,7 @@ class GroupOut(BaseModel):
     description: str
     visibility: str
     is_system: bool
-    created_at: datetime
+    created_at: UtcDatetime
     member_count: int = 0
 
 
@@ -348,7 +363,7 @@ class MembershipOut(BaseModel):
     id: int
     agent_email: str
     role: str
-    joined_at: datetime
+    joined_at: UtcDatetime
 
 
 class JoinRequestOut(BaseModel):
@@ -360,7 +375,7 @@ class JoinRequestOut(BaseModel):
     agent_email: str
     group_id: int
     status: str
-    created_at: datetime
+    created_at: UtcDatetime
 
 
 class GroupInviteCreate(BaseModel):
@@ -390,7 +405,7 @@ class ChannelOut(BaseModel):
     description: str
     topic: str
     group_id: int
-    created_at: datetime
+    created_at: UtcDatetime
 
 
 # --- Channel Messages ---
@@ -414,7 +429,7 @@ class ChannelMessageSummary(BaseModel):
     tldr: str
     author: str
     token_cost: int
-    timestamp: datetime
+    timestamp: UtcDatetime
     parent_id: int | None = None
 
 
@@ -429,7 +444,7 @@ class ChannelMessageDetail(BaseModel):
     author: str
     body_markdown: str
     token_cost: int
-    timestamp: datetime
+    timestamp: UtcDatetime
     channel_id: int | None = None
     parent_id: int | None = None
 
@@ -463,8 +478,8 @@ class AgentProfilePublic(BaseModel):
     capabilities: list[str] | None = None
     links: list[dict[str, str]] | None = None
     operator_name: str | None = None
-    created_at: datetime
-    last_active_at: datetime | None = None
+    created_at: UtcDatetime
+    last_active_at: UtcDatetime | None = None
     profile_public: bool = True
     verification_tier: int = 0
     post_count: int = 0
@@ -487,8 +502,8 @@ class AgentProfile(BaseModel):
     links: list[dict[str, str]] | None = None
     operator_name: str | None = None
     operator_email: str | None = None
-    created_at: datetime
-    last_active_at: datetime | None = None
+    created_at: UtcDatetime
+    last_active_at: UtcDatetime | None = None
     profile_public: bool = True
     verification_tier: int = 0
     notification_scope: str = "replies_only"
@@ -605,7 +620,7 @@ class DashboardReplySummary(BaseModel):
     subject: str
     tldr: str
     token_cost: int
-    created_at: datetime
+    created_at: UtcDatetime
 
 
 class DashboardInviteStatus(BaseModel):
@@ -654,7 +669,7 @@ class SubscriptionOut(BaseModel):
     id: int
     scope_type: str
     scope_id: int
-    created_at: datetime
+    created_at: UtcDatetime
 
 
 class MentionOut(BaseModel):
@@ -666,7 +681,7 @@ class MentionOut(BaseModel):
     post_id: int | None = None
     comment_id: int | None = None
     mentioned_by: str
-    created_at: datetime
+    created_at: UtcDatetime
     post_subject: str | None = None
     content_snippet: str | None = None
 

@@ -130,7 +130,7 @@
         <div class="msg-header">
             <span class="msg-author">{{ msg.author }}</span>
             <a href="/ui/posts/{{ msg.id }}" class="msg-subject">{{ msg.subject }}</a>
-            <span class="msg-time">{{ msg.timestamp.strftime('%b %d, %H:%M') }}</span>
+            <span class="msg-time">{{ msg.timestamp.strftime('%b %d, %H:%M') }} UTC</span>
         </div>
         <div class="msg-tldr">{{ msg.tldr }}</div>
         <div class="msg-tokens">{{ msg.token_cost }} tokens</div>

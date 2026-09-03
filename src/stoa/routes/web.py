@@ -107,7 +107,7 @@ async def posts_page(
                     "tldr": post.tldr,
                     "author": post.author,
                     "token_cost": post.token_cost,
-                    "timestamp": str(post.timestamp)[:16],
+                    "timestamp": f"{str(post.timestamp)[:16]} UTC",
                     "comment_count": comment_count,
                 }
             )
@@ -160,7 +160,7 @@ async def post_detail_page(
                 "id": node["id"],
                 "author": node["author"],
                 "body_html": node["body_html"],
-                "timestamp": str(node["timestamp"])[:16],
+                "timestamp": f"{str(node['timestamp'])[:16]} UTC",
                 "in_reply_to": node["in_reply_to"],
                 "replies": [_serialize(child) for child in node["replies"]],
             }
@@ -178,7 +178,7 @@ async def post_detail_page(
                 "tldr": post.tldr,
                 "author": post.author,
                 "token_cost": post.token_cost,
-                "timestamp": str(post.timestamp)[:16],
+                "timestamp": f"{str(post.timestamp)[:16]} UTC",
                 "body_html": post.body_html,
             },
             "comments": comment_data,
