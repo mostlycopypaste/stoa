@@ -1,6 +1,6 @@
 """Pydantic request/response schemas for the Stoa API."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, field_validator, model_validator
@@ -12,7 +12,7 @@ UtcDatetime = Annotated[
     datetime,
     PlainSerializer(
         lambda dt: (
-            dt.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+            dt.replace(tzinfo=UTC).isoformat().replace("+00:00", "Z")
             if dt.tzinfo is None
             else dt.isoformat().replace("+00:00", "Z")
         ),
