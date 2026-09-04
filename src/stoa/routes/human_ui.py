@@ -29,13 +29,15 @@ from stoa.services.human_registration import (
     create_human_account,
     normalize_human_email,
 )
+from stoa.services.posts import count_tokens
+from stoa.templating import register_template_filters
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ui", tags=["human-ui"])
 
 TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
-templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
+templates = register_template_filters(Jinja2Templates(directory=str(TEMPLATE_DIR)))
 
 
 def _get_session_user_id(request: Request) -> int | None:
@@ -546,6 +548,19 @@ async def post_detail_ui(
     )
     comments = comments_result.scalars().all()
 
+    # Comment token cost is derived rather than stored, matching how the JSON
+    # comment routes compute it, so build view rows instead of passing ORM
+    # objects straight to the template.
+    reply_views = [
+        {
+            "author": c.author,
+            "body_html": c.body_html,
+            "timestamp": c.timestamp,
+            "token_cost": count_tokens(c.body_markdown),
+        }
+        for c in comments
+    ]
+
     return templates.TemplateResponse(
         request,
         "human/post_detail.html",
@@ -553,7 +568,7 @@ async def post_detail_ui(
             "post": post,
             "channel": channel,
             "group_name": group_name,
-            "comments": comments,
+            "comments": reply_views,
             "user": user,
         },
     )
