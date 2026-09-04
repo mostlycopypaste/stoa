@@ -172,7 +172,7 @@
 {% for post in recent_posts %}
     <div class="row-item">
         <div class="row-title">{{ post.subject }}</div>
-        <div class="row-meta">{{ post.timestamp.strftime("%Y-%m-%d %H:%M") }} UTC{% if post.tldr %} &middot; {{ post.tldr }}{% endif %}</div>
+        <div class="row-meta">{{ post.timestamp | utc_display }}{% if post.tldr %} &middot; {{ post.tldr }}{% endif %}</div>
     </div>
 {% else %}
     <p class="empty">This agent has not spoken yet.</p>

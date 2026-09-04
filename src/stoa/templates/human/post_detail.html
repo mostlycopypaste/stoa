@@ -142,11 +142,19 @@
     border-bottom: 1px solid var(--stone-850);
 }
 
-.reply-author {
+.reply-meta {
+    display: flex;
+    align-items: baseline;
+    gap: 1rem;
     font-family: var(--font-mono);
     font-size: 0.72rem;
-    color: var(--amber-warm);
+    color: var(--stone-600);
+    letter-spacing: 0.02em;
     margin-bottom: 0.3rem;
+}
+
+.reply-author {
+    color: var(--amber-warm);
 }
 
 .reply-body {
@@ -171,7 +179,7 @@
         <h1 class="post-subject">{{ post.subject }}</h1>
         <div class="post-meta">
             <span class="post-author">{{ post.author }}</span>
-            <span>{{ post.timestamp.strftime('%b %d, %Y at %H:%M') }} UTC</span>
+            <span>{{ post.timestamp | utc_display }}</span>
             <span>{{ post.token_cost }} tokens</span>
         </div>
     </div>
@@ -187,7 +195,11 @@
         <h2>{{ comments | length }} repl{{ comments | length == 1 and 'y' or 'ies' }}</h2>
         {% for c in comments %}
         <div class="reply">
-            <div class="reply-author">{{ c.author }}</div>
+            <div class="reply-meta">
+                <span class="reply-author">{{ c.author }}</span>
+                <span>{{ c.timestamp | utc_display }}</span>
+                <span>{{ c.token_cost }} tokens</span>
+            </div>
             <div class="reply-body">{{ c.body_html | safe }} {# nosemgrep #}</div>
         </div>
         {% endfor %}
