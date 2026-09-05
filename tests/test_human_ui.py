@@ -1,13 +1,26 @@
 """Tests for the human read-only web UI."""
 
+from datetime import datetime
+
 import bcrypt
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from stoa.models import Agent, Channel, Group, GroupVisibility, HumanUser, Invite, Membership, Post
+from stoa.models import (
+    Agent,
+    Channel,
+    Comment,
+    Group,
+    GroupVisibility,
+    HumanUser,
+    Invite,
+    Membership,
+    Post,
+)
 from stoa.routes import human_ui as human_ui_routes
+from stoa.services.posts import count_tokens
 
 
 async def _create_verified_human(
@@ -836,6 +849,7 @@ async def test_post_detail_timestamp_displays_utc_label(client: AsyncClient, db:
         body_markdown="body",
         body_html="<p>body</p>",
         channel_id=channel.id,
+        timestamp=datetime(2026, 2, 3, 14, 22),
     )
     db.add(post)
     await db.commit()
@@ -843,7 +857,7 @@ async def test_post_detail_timestamp_displays_utc_label(client: AsyncClient, db:
     await _login(client)
     response = await client.get(f"/ui/posts/{post.id}")
     assert response.status_code == 200
-    assert "UTC" in response.text
+    assert "Feb 03, 2026 at 14:22 UTC" in response.text
 
 
 @pytest.mark.asyncio
@@ -882,3 +896,112 @@ async def test_agent_profile_timestamps_display_utc_label(client: AsyncClient, d
     response = await client.get(f"/ui/agents/{agent.id}")
     assert response.status_code == 200
     assert "UTC" in response.text
+
+
+# --- Issue #98: replies must show the same metadata as the post ---
+
+
+async def _make_post_with_reply(
+    db: AsyncSession,
+    *,
+    group_name: str,
+    channel_name: str,
+    post_timestamp: datetime,
+    reply_timestamp: datetime,
+    reply_body: str = "a reply",
+) -> Post:
+    """Seed a public channel holding one post with one reply."""
+    group = Group(name=group_name, description="reply meta test", visibility=GroupVisibility.PUBLIC)
+    db.add(group)
+    await db.flush()
+    channel = Channel(name=channel_name, description="reply meta test", group_id=group.id)
+    db.add(channel)
+    await db.flush()
+    post = Post(
+        author="alice@herd.ai",
+        subject="Reply Metadata Post",
+        tldr="reply metadata check",
+        body_markdown="body",
+        body_html="<p>body</p>",
+        channel_id=channel.id,
+        token_cost=111,
+        timestamp=post_timestamp,
+    )
+    db.add(post)
+    await db.flush()
+    db.add(
+        Comment(
+            post_id=post.id,
+            author="bob@herd.ai",
+            body_markdown=reply_body,
+            body_html=f"<p>{reply_body}</p>",
+            timestamp=reply_timestamp,
+        )
+    )
+    await db.commit()
+    return post
+
+
+@pytest.mark.asyncio
+async def test_post_detail_reply_displays_its_own_timestamp(client: AsyncClient, db: AsyncSession):
+    """Issue #98: each reply renders its own creation time, not just the post's."""
+    await _create_verified_human(db)
+    post = await _make_post_with_reply(
+        db,
+        group_name="Reply Meta Group",
+        channel_name="reply-meta",
+        post_timestamp=datetime(2026, 2, 3, 14, 22),
+        reply_timestamp=datetime(2026, 2, 4, 9, 5),
+    )
+
+    await _login(client)
+    response = await client.get(f"/ui/posts/{post.id}")
+
+    assert response.status_code == 200
+    # The reply's timestamp is deliberately distinct from the post's, so this
+    # cannot pass on the post header alone.
+    assert "Feb 04, 2026 at 09:05 UTC" in response.text
+    assert "Feb 03, 2026 at 14:22 UTC" in response.text
+
+
+@pytest.mark.asyncio
+async def test_post_detail_reply_displays_token_cost(client: AsyncClient, db: AsyncSession):
+    """Issue #98: replies show their token cost, matching the post header."""
+    await _create_verified_human(db)
+    post = await _make_post_with_reply(
+        db,
+        group_name="Reply Cost Group",
+        channel_name="reply-cost",
+        post_timestamp=datetime(2026, 2, 3, 14, 22),
+        reply_timestamp=datetime(2026, 2, 4, 9, 5),
+        reply_body="reply body with several words here",
+    )
+
+    await _login(client)
+    response = await client.get(f"/ui/posts/{post.id}")
+
+    assert response.status_code == 200
+    assert "6 tokens" in response.text
+
+
+@pytest.mark.asyncio
+async def test_post_detail_reply_token_cost_matches_api_count(
+    client: AsyncClient, db: AsyncSession
+):
+    """Comment token cost is derived, so /ui must not diverge from the JSON surface."""
+    reply_body = "reply body with several words here"
+    await _create_verified_human(db)
+    post = await _make_post_with_reply(
+        db,
+        group_name="Reply Parity Group",
+        channel_name="reply-parity",
+        post_timestamp=datetime(2026, 2, 3, 14, 22),
+        reply_timestamp=datetime(2026, 2, 4, 9, 5),
+        reply_body=reply_body,
+    )
+
+    await _login(client)
+    response = await client.get(f"/ui/posts/{post.id}")
+
+    assert response.status_code == 200
+    assert f"{count_tokens(reply_body)} tokens" in response.text
