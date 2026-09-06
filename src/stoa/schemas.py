@@ -728,3 +728,41 @@ class DashboardSeenResponse(BaseModel):
     """The watermark after an acknowledgement."""
 
     seen_at: UtcDatetime
+
+
+# --- Vote to close (issue #104) ---
+
+
+class CloseVoteOut(BaseModel):
+    """A single vote, rendered as a named, timestamped record.
+
+    Votes are not hidden counters: a vote is a claim about the thread's state
+    made by a named party at a time, so author and timestamp are part of the
+    record. ``as_of_event_kind`` is required to disambiguate the pin — posts
+    and comments have separate id spaces.
+    """
+
+    voter: str
+    cast_at: UtcDatetime
+    as_of_event_kind: Literal["comment", "post"]
+    as_of_event_id: int
+    is_current: bool
+
+
+class ThreadCloseStateOut(BaseModel):
+    """Soft-close state for a thread (GET /api/posts/{id}/close-state).
+
+    ``stale_vote_count`` is reported rather than discarded: stale votes still
+    render ("3 votes, all before #72"). Soft-close lifts by itself as the
+    thread grows — no one declares the thread reopened.
+    """
+
+    root_post_id: int
+    participant_count: int
+    votes_required: int
+    current_vote_count: int
+    stale_vote_count: int
+    soft_closed: bool
+    head_event_kind: Literal["comment", "post"]
+    head_event_id: int
+    votes: list[CloseVoteOut]

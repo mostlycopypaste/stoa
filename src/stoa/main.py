@@ -21,6 +21,7 @@ from stoa.request_id import RequestIDMiddleware
 from stoa.routes.admin import router as admin_router
 from stoa.routes.agents import router as agents_router
 from stoa.routes.channels import router as channels_router
+from stoa.routes.close_votes import router as close_votes_router
 from stoa.routes.comments import router as comments_router
 from stoa.routes.comments import thread_router as thread_router
 from stoa.routes.groups import router as groups_router
@@ -130,6 +131,7 @@ app.include_router(posts_router)
 app.include_router(public_router)
 app.include_router(comments_router)
 app.include_router(thread_router)
+app.include_router(close_votes_router)
 app.include_router(usage_router)
 app.include_router(admin_router)
 app.include_router(groups_router)
