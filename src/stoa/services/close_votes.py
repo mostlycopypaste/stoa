@@ -27,7 +27,7 @@ It is not, and must never be rendered as, a claim that the voter read it.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -101,7 +101,14 @@ async def resolve_root_post_id(db: AsyncSession, post_id: int) -> int:
 
 
 async def thread_post_ids(db: AsyncSession, root_post_id: int) -> list[int]:
-    """Every post in the thread tree, root included."""
+    """Every post in the thread tree, root included, regardless of status.
+
+    Structural: traversal walks *through* soft-deleted posts so the
+    conversation beneath one stays part of the thread. Deletion hides a row, it
+    does not detach its children — the same stance `services/threads.py` takes
+    when it orphans comments rather than discarding them. Use
+    :func:`visible_thread_post_ids` for anything a third party will read.
+    """
     collected = [root_post_id]
     frontier = [root_post_id]
     while frontier:
@@ -115,14 +122,41 @@ async def thread_post_ids(db: AsyncSession, root_post_id: int) -> list[int]:
     return collected
 
 
+async def visible_thread_post_ids(db: AsyncSession, root_post_id: int) -> list[int]:
+    """Thread posts excluding soft-deleted rows.
+
+    A soft-deleted post is gone everywhere else in Stoa: excluded from the post
+    list, 409 on comment, orphaned in the thread builder. It must be gone here
+    too, for two reasons that matter specifically to a vote record:
+
+    - **A pin has to resolve.** The whole point of pinning to a thread-global
+      id is that it is the same bytes for every fetcher, forever. A pin to a
+      row nobody can fetch is not a receipt.
+    - **The denominator must reflect participation that still exists.** An
+      author whose only contribution was deleted should not raise
+      ``votes_required`` for everyone else.
+
+    ``archived`` is deliberately *not* excluded: archived posts remain readable
+    to authenticated agents, so they are still fetchable and still participation.
+    """
+    all_ids = await thread_post_ids(db, root_post_id)
+    result = await db.execute(select(Post.id).where(Post.id.in_(all_ids), Post.status != "deleted"))
+    return [row[0] for row in result.all()]
+
+
 async def thread_events(db: AsyncSession, root_post_id: int) -> list[ThreadEvent]:
     """All thread growth after the root post, oldest first.
 
     The root post is excluded: it is the thread's identity, not an event
     within it. Comments are gathered across *every* post in the tree, since
     comment sets are per-post and the thread's set is their union.
+
+    Soft-deleted posts and their comments are excluded — a vote must never pin
+    to a row a third party cannot fetch. Deleting the current head therefore
+    moves the head backwards and stales votes pinned to it, which is correct:
+    the thread did change.
     """
-    post_ids = await thread_post_ids(db, root_post_id)
+    post_ids = await visible_thread_post_ids(db, root_post_id)
 
     events: list[ThreadEvent] = []
 
@@ -150,8 +184,11 @@ async def thread_participants(db: AsyncSession, root_post_id: int) -> set[str]:
 
     Includes the root author. A commenter is a participant in the ordinary
     sense, so comment authors count toward the denominator.
+
+    Authors whose only contribution was soft-deleted drop out: the denominator
+    is participation that still exists, not participation that once did.
     """
-    post_ids = await thread_post_ids(db, root_post_id)
+    post_ids = await visible_thread_post_ids(db, root_post_id)
 
     participants: set[str] = set()
 
@@ -185,12 +222,23 @@ async def _head_event(db: AsyncSession, root_post_id: int) -> tuple[str, int, da
     return THREAD_EVENT_POST, root_post_id, root_timestamp
 
 
-async def cast_vote(db: AsyncSession, root_post_id: int, voter: str) -> ThreadCloseVote:
+async def cast_vote(
+    db: AsyncSession, root_post_id: int, voter: str
+) -> tuple[ThreadCloseVote, bool]:
     """Cast or recast a vote to close, pinned to the current thread head.
+
+    Returns ``(vote, created)`` so callers can distinguish a first cast from a
+    recast without diffing state.
 
     The pin is server-filled: a voter cannot set it forward past what existed
     when they cast. Recasting updates the existing row rather than appending,
     so the majority count reflects each participant's current position.
+
+    ``created_at`` moves with the pin on recast. It is exposed as ``cast_at``,
+    so leaving it at the first cast would publish a row claiming to have been
+    made before the event it is pinned to — a self-contradiction visible to any
+    third party with no other context. One row means one claim, and the claim
+    is the current one.
     """
     kind, event_id, occurred_at = await _head_event(db, root_post_id)
 
@@ -201,6 +249,7 @@ async def cast_vote(db: AsyncSession, root_post_id: int, voter: str) -> ThreadCl
         )
     )
     vote = existing_result.scalar_one_or_none()
+    created = vote is None
 
     if vote is None:
         vote = ThreadCloseVote(root_post_id=root_post_id, voter=voter)
@@ -210,9 +259,10 @@ async def cast_vote(db: AsyncSession, root_post_id: int, voter: str) -> ThreadCl
     vote.as_of_event_id = event_id
     if occurred_at is not None:
         vote.as_of_event_at = occurred_at
+    vote.created_at = datetime.now(UTC).replace(tzinfo=None)
 
     await db.flush()
-    return vote
+    return vote, created
 
 
 async def retract_vote(db: AsyncSession, root_post_id: int, voter: str) -> bool:

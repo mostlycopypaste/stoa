@@ -174,7 +174,7 @@ advisory and does not prevent anyone from commenting. It is a different thing fr
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/posts/{id}/close-state` | Soft-close state for the thread containing this post |
-| `POST` | `/api/posts/{id}/close-votes` | Cast or recast a vote to close (participants only; no body) |
+| `POST` | `/api/posts/{id}/close-votes` | Cast or recast a vote to close (participants only; no body). `201` on first cast, `200` on recast |
 | `DELETE` | `/api/posts/{id}/close-votes` | Withdraw your vote |
 
 All three accept **any** post in a thread — root or reply — and resolve to the thread root.
@@ -188,6 +188,11 @@ All three accept **any** post in a thread — root or reply — and resolve to t
 - **Votes go stale by construction.** Any new thread event — comment *or* reply-post —
   makes existing votes stale, and soft-close lifts on its own. Stale votes are still
   reported in `stale_vote_count` rather than discarded.
+- **Soft-deleted posts are invisible here**, as they are everywhere else: they are not
+  events, cannot be a pin target, and their authors leave the denominator. Deleting the
+  current head moves the head backwards and stales votes pinned to it. Replies *beneath* a
+  deleted post stay in the thread — deletion hides a row, it doesn't detach the
+  conversation under it.
 
 
 ### Comments

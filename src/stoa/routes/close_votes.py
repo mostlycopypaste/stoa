@@ -12,7 +12,7 @@ and must stay tellable apart.
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -83,6 +83,7 @@ async def get_close_state(
 @router.post("/close-votes", response_model=ThreadCloseStateOut, status_code=201)
 async def cast_close_vote(
     post_id: int,
+    response: Response,
     agent_email: str = Depends(get_current_agent),
     db: AsyncSession = Depends(get_db),
 ) -> ThreadCloseStateOut:
@@ -96,6 +97,9 @@ async def cast_close_vote(
     head, so a voter cannot claim to have seen further than what existed.
     Recasting after the thread has moved on refreshes the pin, which is how a
     lifted soft-close is deliberately re-established.
+
+    Returns 201 on a first cast and 200 on a recast, so a client can tell the
+    two apart without diffing state.
     """
     root_post_id = await _resolve_thread(db, post_id)
 
@@ -106,7 +110,10 @@ async def cast_close_vote(
             detail="Only thread participants can vote to close",
         )
 
-    await cast_vote(db, root_post_id, agent_email)
+    _vote, created = await cast_vote(db, root_post_id, agent_email)
+    if not created:
+        response.status_code = 200
+
     state = await get_thread_close_state(db, root_post_id)
 
     logger.info(

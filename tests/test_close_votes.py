@@ -242,7 +242,7 @@ class TestVotePin:
         root = await _post(client, ALICE)
         comment_id = await _comment(client, BOB, root)
 
-        vote = await cast_vote(db, root, "alice@herd.ai")
+        vote, _ = await cast_vote(db, root, "alice@herd.ai")
         assert vote.as_of_event_kind == "comment"
         assert vote.as_of_event_id == comment_id
 
@@ -251,7 +251,7 @@ class TestVotePin:
         root = await _post(client, ALICE)
         reply = await _post(client, BOB, subject="Re: Root", parent_post_id=root)
 
-        vote = await cast_vote(db, root, "alice@herd.ai")
+        vote, _ = await cast_vote(db, root, "alice@herd.ai")
         assert vote.as_of_event_kind == "post"
         assert vote.as_of_event_id == reply
 
@@ -260,7 +260,7 @@ class TestVotePin:
     ):
         """A thread with no events yet still accepts a vote."""
         root = await _post(client, ALICE)
-        vote = await cast_vote(db, root, "alice@herd.ai")
+        vote, _ = await cast_vote(db, root, "alice@herd.ai")
         assert vote.as_of_event_kind == "post"
         assert vote.as_of_event_id == root
 
@@ -365,3 +365,141 @@ class TestCloseVoteRoutes:
         vote = resp.json()["votes"][0]
         assert vote["as_of_event_kind"] == "comment"
         assert vote["as_of_event_id"] == comment_id
+
+
+class TestRecastReceiptConsistency:
+    """Marey, PR #106: a recast vote must not predate the event it pins to."""
+
+    async def test_recast_moves_cast_at_forward_with_the_pin(
+        self, client: AsyncClient, db: AsyncSession
+    ):
+        """`cast_at` is what a third party reads as "when this claim was made".
+
+        If the pin moves on recast but the timestamp doesn't, the row says the
+        vote was cast before the event it claims to have seen — the one
+        inconsistency a third party can spot with no other context.
+        """
+        root = await _post(client, ALICE)
+        await _comment(client, BOB, root)
+        await cast_vote(db, root, "alice@herd.ai")
+
+        await _post(client, BOB, subject="Re: Root", parent_post_id=root)
+        vote, _ = await cast_vote(db, root, "alice@herd.ai")
+
+        assert vote.created_at >= vote.as_of_event_at, (
+            "a vote cannot have been cast before the event it is pinned to"
+        )
+
+    async def test_recast_cast_at_visible_through_the_api(self, client: AsyncClient):
+        root = await _post(client, ALICE)
+        await _comment(client, BOB, root)
+        await client.post(f"/api/posts/{root}/close-votes", headers=ALICE)
+
+        await _post(client, BOB, subject="Re: Root", parent_post_id=root)
+        resp = await client.post(f"/api/posts/{root}/close-votes", headers=ALICE)
+
+        state = await client.get(f"/api/posts/{root}/close-state", headers=ALICE)
+        vote = state.json()["votes"][0]
+        assert vote["is_current"] is True
+        assert resp.status_code == 200, "a recast updates an existing vote"
+
+    async def test_first_cast_is_201_recast_is_200(self, client: AsyncClient):
+        """Let a client tell create from update without diffing state."""
+        root = await _post(client, ALICE)
+        await _comment(client, BOB, root)
+
+        first = await client.post(f"/api/posts/{root}/close-votes", headers=ALICE)
+        assert first.status_code == 201
+
+        second = await client.post(f"/api/posts/{root}/close-votes", headers=ALICE)
+        assert second.status_code == 200
+
+
+class TestDeletedPostsAreInvisible:
+    """Marey, PR #106: soft-deleted posts must not be events, heads, or participants.
+
+    Everywhere else in Stoa `status='deleted'` means gone — the post list
+    excludes it, commenting on it 409s, `services/threads.py` orphans children
+    of a missing parent. A pin must resolve for a third party, so a deleted row
+    cannot be a valid pin target.
+    """
+
+    async def _delete(self, client: AsyncClient, headers: dict, post_id: int) -> None:
+        resp = await client.delete(f"/api/posts/{post_id}", headers=headers)
+        assert resp.status_code in (200, 204), resp.text
+
+    async def test_deleted_reply_is_not_a_thread_event(self, client: AsyncClient, db: AsyncSession):
+        root = await _post(client, ALICE)
+        reply = await _post(client, BOB, subject="Re: Root", parent_post_id=root)
+        await self._delete(client, BOB, reply)
+
+        events = await thread_events(db, root)
+        assert ("post", reply) not in {(e.kind, e.id) for e in events}
+
+    async def test_deleted_reply_is_not_the_head_a_vote_pins_to(
+        self, client: AsyncClient, db: AsyncSession
+    ):
+        root = await _post(client, ALICE)
+        comment_id = await _comment(client, BOB, root)
+        reply = await _post(client, BOB, subject="Re: Root", parent_post_id=root)
+        await self._delete(client, BOB, reply)
+
+        vote, _ = await cast_vote(db, root, "alice@herd.ai")
+        assert (vote.as_of_event_kind, vote.as_of_event_id) != ("post", reply)
+        assert (vote.as_of_event_kind, vote.as_of_event_id) == ("comment", comment_id)
+
+    async def test_deleted_post_author_leaves_the_denominator(
+        self, client: AsyncClient, db: AsyncSession
+    ):
+        root = await _post(client, ALICE)
+        reply = await _post(client, BOB, subject="Re: Root", parent_post_id=root)
+        assert await thread_participants(db, root) == {"alice@herd.ai", "bob@herd.ai"}
+
+        await self._delete(client, BOB, reply)
+        assert await thread_participants(db, root) == {"alice@herd.ai"}, (
+            "votes_required must not be computed over participation that no longer exists"
+        )
+
+    async def test_comments_on_a_deleted_post_are_not_thread_events(
+        self, client: AsyncClient, db: AsyncSession
+    ):
+        root = await _post(client, ALICE)
+        reply = await _post(client, BOB, subject="Re: Root", parent_post_id=root)
+        nested_comment = await _comment(client, ALICE, reply)
+        await self._delete(client, BOB, reply)
+
+        events = await thread_events(db, root)
+        assert ("comment", nested_comment) not in {(e.kind, e.id) for e in events}
+
+    async def test_descendants_of_a_deleted_post_remain_in_the_thread(
+        self, client: AsyncClient, db: AsyncSession
+    ):
+        """Deletion hides a row; it does not detach the conversation beneath it.
+
+        Traversal still walks *through* a deleted post so its children stay in
+        the thread — mirroring `services/threads.py`, which orphans children
+        rather than discarding them.
+        """
+        root = await _post(client, ALICE)
+        reply = await _post(client, BOB, subject="Re: Root", parent_post_id=root)
+        grandchild = await _post(client, ALICE, subject="Re: Re: Root", parent_post_id=reply)
+        await self._delete(client, BOB, reply)
+
+        events = await thread_events(db, root)
+        assert ("post", grandchild) in {(e.kind, e.id) for e in events}
+
+    async def test_deleting_the_head_stales_votes_pinned_to_it(
+        self, client: AsyncClient, db: AsyncSession
+    ):
+        """Deletion changes the thread, so votes pinned to the old head go stale."""
+        root = await _post(client, ALICE)
+        await _comment(client, BOB, root)
+        reply = await _post(client, BOB, subject="Re: Root", parent_post_id=root)
+        await cast_vote(db, root, "alice@herd.ai")
+        await cast_vote(db, root, "bob@herd.ai")
+        assert (await get_thread_close_state(db, root)).soft_closed is True
+
+        await self._delete(client, BOB, reply)
+        state = await get_thread_close_state(db, root)
+        assert state.soft_closed is False
+        assert state.stale_vote_count == 2
