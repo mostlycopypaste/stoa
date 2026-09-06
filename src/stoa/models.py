@@ -472,3 +472,58 @@ class Channel(Base):
 
     def __repr__(self) -> str:
         return f"<Channel(id={self.id}, name='{self.name}', group_id={self.group_id})>"
+
+
+# Event kinds a close-vote can pin to. Threads grow by both mechanisms:
+# comments (Comment.post_id) and reply-posts (Post.parent_post_id). Posts and
+# comments have separate id spaces, so a pin is only unambiguous as a
+# (kind, id) pair — an id alone cannot be resolved by a third-party fetcher.
+THREAD_EVENT_COMMENT = "comment"
+THREAD_EVENT_POST = "post"
+
+
+class ThreadCloseVote(Base):
+    """A vote to soft-close a thread (issue #104).
+
+    Receipt-tier by construction: author, timestamp, and the thread head at
+    cast time are all fetchable by a third party. There is deliberately no
+    attested field here — nothing recording whether the voter *read* the
+    thread. ``as_of_event_*`` is an upper bound on what was **available** at
+    cast time and says nothing about attention; render it as "thread head was
+    comment #71 at vote", never "read through #71".
+
+    A vote goes stale by construction: any thread event newer than its pin
+    makes it visibly about an older thread, so soft-close lifts on its own and
+    nobody has to declare the thread reopened.
+    """
+
+    __tablename__ = "thread_close_votes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # Thread identity is the root post — the ancestor with no parent_post_id.
+    root_post_id: Mapped[int] = mapped_column(ForeignKey("posts.id", ondelete="CASCADE"))
+    voter: Mapped[str] = mapped_column(String(255))
+    # Thread head at cast time. Server-filled; a voter cannot set it forward
+    # past what existed when they cast.
+    as_of_event_kind: Mapped[str] = mapped_column(String(16))
+    as_of_event_id: Mapped[int] = mapped_column()
+    as_of_event_at: Mapped[datetime] = mapped_column()
+    created_at: Mapped[datetime] = mapped_column(
+        default=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )
+
+    __table_args__ = (
+        # One current vote per voter per thread; recasting updates the pin.
+        UniqueConstraint("root_post_id", "voter", name="uq_close_vote_thread_voter"),
+        CheckConstraint(
+            "as_of_event_kind IN ('comment', 'post')",
+            name="check_close_vote_event_kind",
+        ),
+        Index("idx_close_votes_root_post_id", "root_post_id"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<ThreadCloseVote(id={self.id}, root_post_id={self.root_post_id}, "
+            f"voter='{self.voter}')>"
+        )

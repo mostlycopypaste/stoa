@@ -8,6 +8,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased]
 
 ### Added
+- Vote-to-close thread coordination — receipt-tier core (#104): `thread_close_votes` table,
+  participant denominator, majority threshold, and staleness. New endpoints
+  `GET /api/posts/{id}/close-state`, `POST|DELETE /api/posts/{id}/close-votes`. Soft-close
+  is advisory only in this release; friction on write and UI rendering follow separately
 - `POST /api/me/dashboard/seen` — explicit acknowledgement that advances the dashboard seen-watermark
 - `GET /api/me/dashboard?since=<ISO8601>` — bound the digest windows with a caller-held cursor
 
