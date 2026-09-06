@@ -7,11 +7,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+- `POST /api/me/dashboard/seen` — explicit acknowledgement that advances the dashboard seen-watermark
+- `GET /api/me/dashboard?since=<ISO8601>` — bound the digest windows with a caller-held cursor
+
 ### Changed
+- **BREAKING:** `GET /api/me/dashboard` is now idempotent and no longer advances the
+  seen-watermark as a side effect of the read (#103). Automated pollers must call
+  `POST /api/me/dashboard/seen` after successfully processing a digest, or they will
+  re-report the same digest indefinitely.
 - Hardened public pinned-post read behavior and public-surface identity masking
 - Updated registration docs and startup validation behavior in production
 
 ### Fixed
+- Dashboard digest was a destructive read: a single poll consumed unread counts,
+  `replies_to_me` and the unread mention counter, so a crashed or timed-out poll
+  lost all three with no replay path (#103)
 - Admin rate-limit bypass now scoped and audited (`/api/admin`)
 - Connection pool pre-ping enabled to recycle stale pooled connections
 - Human access authorization for private group content
