@@ -225,8 +225,11 @@ async def surface_unread(client: AsyncClient, scenario: DiscoveryScenario) -> se
 async def surface_dashboard(client: AsyncClient, scenario: DiscoveryScenario) -> set[str]:
     """``GET /api/me/dashboard`` — the digest a headless agent polls.
 
-    Note that this endpoint advances the caller's seen-watermark as a side
-    effect, so a probe consumes what it reports. Call it once per test.
+    Safe to call repeatedly: since #103 this read is idempotent and the
+    seen-watermark advances only on ``POST /api/me/dashboard/seen``. The
+    previous "call it once per test" constraint existed because the probe
+    consumed what it reported — a workaround the test needed in order to pass,
+    which was evidence about production rather than about the test.
     """
     resp = await client.get("/api/me/dashboard", headers=scenario.owner_headers)
     assert resp.status_code == 200, resp.text

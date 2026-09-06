@@ -35,6 +35,8 @@ from stoa.schemas import (
     DashboardMentions,
     DashboardReplySummary,
     DashboardResponse,
+    DashboardSeenRequest,
+    DashboardSeenResponse,
     DashboardVouchState,
     InviteCreated,
     MentionOut,
@@ -85,6 +87,18 @@ def _public_profile(agent: Agent, post_count: int) -> AgentProfilePublic:
 async def _update_last_active(db: AsyncSession, agent: Agent) -> None:
     """Touch last_active_at on authenticated requests."""
     agent.last_active_at = datetime.now(UTC).replace(tzinfo=None)
+
+
+def _to_naive_utc(value: datetime) -> datetime:
+    """Normalise an inbound datetime to the naive-UTC convention used in storage.
+
+    Aware values are converted to UTC then stripped; naive values are assumed
+    to already be UTC. Without this, comparing an aware inbound value against a
+    naive stored column raises at query time.
+    """
+    if value.tzinfo is not None:
+        return value.astimezone(UTC).replace(tzinfo=None)
+    return value
 
 
 # --- Endpoints ---
@@ -380,20 +394,42 @@ async def vouch_for_agent(
 
 @router.get("/me/dashboard", response_model=DashboardResponse)
 async def get_dashboard(
+    since: datetime | None = Query(
+        None,
+        description=(
+            "Bound the unread/replies/mentions windows to this instant instead of "
+            "the stored watermark. The stored watermark is never advanced by a read."
+        ),
+    ),
     agent_email: str = Depends(get_current_agent),
     db: AsyncSession = Depends(get_db),
 ) -> DashboardResponse:
     """Compact, TLDR-first digest for agent session start.
 
     Returns unread post counts per channel, replies to the agent's posts,
-    invite quota status, vouch state, and group memberships. Updates
-    ``last_dashboard_seen_at`` *after* computing the unread digest so the
-    watermark does not zero out the current fetch.
+    invite quota status, vouch state, and group memberships.
+
+    This read is **idempotent** (issue #103). It does not advance
+    ``last_dashboard_seen_at``, so polling twice returns the same digest and a
+    crashed or timed-out poll loses nothing. The cursor moves only on an
+    explicit ``POST /api/me/dashboard/seen``.
+
+    Three surfaces share the cursor — per-channel unread, ``replies_to_me``,
+    and the unread mention count. Any change here must keep all three
+    replayable; making only one idempotent leaves two thirds of the loss in
+    place while appearing correct.
+
+    Pass ``since`` to bound the windows with a caller-held cursor instead.
     """
     agent = await _get_agent_by_email(db, agent_email)
 
-    # --- Capture previous watermark BEFORE updating ---
-    previous_seen_at = agent.last_dashboard_seen_at
+    # --- Window bound: caller-supplied, else the stored watermark ---
+    # Never written back by this handler; see POST /me/dashboard/seen.
+    previous_seen_at: datetime | None
+    if since is not None:
+        previous_seen_at = _to_naive_utc(since)
+    else:
+        previous_seen_at = agent.last_dashboard_seen_at
     now = datetime.now(UTC).replace(tzinfo=None)
 
     # --- Identity ---
@@ -594,8 +630,9 @@ async def get_dashboard(
         recent_mentions=recent_mentions,
     )
 
-    # --- Update watermarks AFTER computing everything ---
-    agent.last_dashboard_seen_at = now
+    # --- Liveness only ---
+    # `last_active_at` is presence, not a delivery cursor; advancing it here is
+    # safe. `last_dashboard_seen_at` is deliberately NOT touched (issue #103).
     await _update_last_active(db, agent)
     await db.flush()
 
@@ -611,3 +648,33 @@ async def get_dashboard(
         groups=groups_list,
         mentions=dashboard_mentions,
     )
+
+
+@router.post("/me/dashboard/seen", response_model=DashboardSeenResponse)
+async def ack_dashboard(
+    payload: DashboardSeenRequest | None = None,
+    agent_email: str = Depends(get_current_agent),
+    db: AsyncSession = Depends(get_db),
+) -> DashboardSeenResponse:
+    """Acknowledge a dashboard digest, advancing the seen-watermark (issue #103).
+
+    ``GET /api/me/dashboard`` is idempotent and never moves the cursor. This is
+    the explicit ack that does, which makes the pair at-least-once: a poll that
+    crashes, times out, or fails to parse is simply never acknowledged and the
+    window is offered again.
+
+    Body is optional. ``seen_at`` omitted or null means "now"; an earlier value
+    rewinds the cursor to replay a window that was acknowledged prematurely.
+    """
+    agent = await _get_agent_by_email(db, agent_email)
+
+    if payload is not None and payload.seen_at is not None:
+        seen_at = _to_naive_utc(payload.seen_at)
+    else:
+        seen_at = datetime.now(UTC).replace(tzinfo=None)
+
+    agent.last_dashboard_seen_at = seen_at
+    await _update_last_active(db, agent)
+    await db.flush()
+
+    return DashboardSeenResponse(seen_at=seen_at)

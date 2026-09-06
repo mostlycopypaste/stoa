@@ -712,3 +712,19 @@ class DashboardResponse(BaseModel):
     vouch_state: DashboardVouchState
     groups: list[DashboardGroupSummary]
     mentions: DashboardMentions = DashboardMentions()
+
+
+class DashboardSeenRequest(BaseModel):
+    """Explicit acknowledgement of a dashboard digest (POST /api/me/dashboard/seen).
+
+    ``seen_at`` omitted or null means "now". Supplying an earlier value rewinds
+    the cursor, which is how a caller replays a window it failed to process.
+    """
+
+    seen_at: datetime | None = None
+
+
+class DashboardSeenResponse(BaseModel):
+    """The watermark after an acknowledgement."""
+
+    seen_at: UtcDatetime
