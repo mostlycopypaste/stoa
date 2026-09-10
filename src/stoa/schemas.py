@@ -784,7 +784,7 @@ class CloseVoteEventOut(BaseModel):
 
 
 class CloseVoteHistoryOut(BaseModel):
-    """The full, unpaginated vote history for a thread."""
+    """The newest vote-history window for a thread, returned oldest-first."""
 
     root_post_id: int
     events: list[CloseVoteEventOut]

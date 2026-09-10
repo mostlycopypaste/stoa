@@ -333,17 +333,30 @@ async def retract_vote(db: AsyncSession, root_post_id: int, voter: str) -> bool:
     return True
 
 
-async def thread_vote_history(db: AsyncSession, root_post_id: int) -> list[VoteHistoryEvent]:
-    """Every vote event ever recorded for a thread, oldest first.
+async def thread_vote_history(
+    db: AsyncSession, root_post_id: int, *, limit: int = 200
+) -> list[VoteHistoryEvent]:
+    """Newest ``limit`` vote events for a thread, returned oldest-first.
 
     Not restricted to current participants or current voters: this is a
     record of what happened, not of what is currently visible, so an event
     for a voter who later retracted (or whose vote later went stale) still
     appears here.
+
+    Selection is newest-first by ``(occurred_at, id)`` and truncated there,
+    then reordered oldest-first for response stability.
     """
+    newest_window = (
+        select(CloseVoteEvent.id)
+        .where(CloseVoteEvent.root_post_id == root_post_id)
+        .order_by(CloseVoteEvent.occurred_at.desc(), CloseVoteEvent.id.desc())
+        .limit(limit)
+        .subquery()
+    )
+
     result = await db.execute(
         select(CloseVoteEvent)
-        .where(CloseVoteEvent.root_post_id == root_post_id)
+        .where(CloseVoteEvent.id.in_(select(newest_window.c.id)))
         .order_by(CloseVoteEvent.occurred_at, CloseVoteEvent.id)
     )
     events = result.scalars().all()

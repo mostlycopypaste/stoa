@@ -6,6 +6,7 @@ here — they land in follow-up PRs.
 """
 
 import itertools
+from datetime import datetime
 
 from httpx import AsyncClient
 from sqlalchemy import select
@@ -648,3 +649,50 @@ class TestVoteHistoryEvents:
 
         after = await thread_vote_history(db, root)
         assert after == before, "deleting a post must not mutate or remove past events"
+
+    async def test_history_default_limit_returns_newest_200_oldest_first(
+        self, client: AsyncClient, db: AsyncSession
+    ):
+        root = await _post(client, ALICE)
+
+        for _ in range(103):
+            await cast_vote(db, root, "alice@herd.ai")
+            await retract_vote(db, root, "alice@herd.ai")
+
+        expected = await thread_vote_history(db, root, limit=200)
+
+        resp = await client.get(f"/api/posts/{root}/close-votes/history", headers=ALICE)
+        assert resp.status_code == 200
+        events = resp.json()["events"]
+        assert len(events) == 200
+
+        assert [e["action"] for e in events] == [e.action for e in expected]
+        assert [datetime.fromisoformat(e["occurred_at"]).replace(tzinfo=None) for e in events] == [
+            e.occurred_at for e in expected
+        ]
+
+    async def test_history_explicit_limit_truncates_to_newest_n(self, client: AsyncClient):
+        root = await _post(client, ALICE)
+
+        for _ in range(3):
+            await client.post(f"/api/posts/{root}/close-votes", headers=ALICE)
+            await client.delete(f"/api/posts/{root}/close-votes", headers=ALICE)
+
+        resp = await client.get(f"/api/posts/{root}/close-votes/history?limit=3", headers=ALICE)
+        assert resp.status_code == 200
+        events = resp.json()["events"]
+        assert len(events) == 3
+        assert [e["action"] for e in events] == ["retract", "cast", "retract"]
+
+    async def test_history_limit_bounds_rejected(self, client: AsyncClient):
+        root = await _post(client, ALICE)
+
+        too_small = await client.get(
+            f"/api/posts/{root}/close-votes/history?limit=0", headers=ALICE
+        )
+        assert too_small.status_code == 422
+
+        too_large = await client.get(
+            f"/api/posts/{root}/close-votes/history?limit=1001", headers=ALICE
+        )
+        assert too_large.status_code == 422

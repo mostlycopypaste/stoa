@@ -157,8 +157,10 @@ GET /api/posts/{post_id}/close-votes/history
 - New response schema in `src/stoa/schemas.py` alongside `CloseVoteOut`
   (line ~736). Optional pin fields, matching the nullable columns.
 
-No pagination in this PR. Say so in the PR body rather than leaving it unstated —
-threads are small now, and adding a cursor later is additive.
+Bounded newest-window in this PR: optional `?limit=` (default 200, bounds 1..1000)
+selects newest N by `(occurred_at,id)` descending, then returns that window
+oldest-first. This makes pathological threads degrade to "truncated" instead of
+hanging, and keeps a future cursor addition response-shape compatible.
 
 ## 6. Tests
 
@@ -201,7 +203,7 @@ Do not build these. They are #104 part 2 and have their own decisions pending:
 
 - Any friction on write. A soft-closed thread must still accept comments exactly as
   it does today.
-- The `X-Acknowledge-Soft-Close` header in any form.
+- The `X-Acknowledge-Soft-Close` header in any form (when this lands, its pin token is explicit text like `comment:<id>`, not a bare `true`).
 - UI rendering of vote history.
 - Pagination on the history endpoint.
 

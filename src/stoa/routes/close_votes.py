@@ -12,7 +12,7 @@ and must stay tellable apart.
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -147,6 +147,16 @@ async def retract_close_vote(
 @router.get("/close-votes/history", response_model=CloseVoteHistoryOut)
 async def get_close_vote_history(
     post_id: int,
+    limit: int = Query(
+        default=200,
+        ge=1,
+        le=1000,
+        description=(
+            "Maximum history events to return. Selects the newest N by "
+            "(occurred_at,id) descending, then returns that window oldest-first. "
+            "Default 200."
+        ),
+    ),
     agent_email: str = Depends(get_current_agent),
     db: AsyncSession = Depends(get_db),
 ) -> CloseVoteHistoryOut:
@@ -159,11 +169,15 @@ async def get_close_vote_history(
     fetch is not a receipt. Casting a vote stays participants-only; that
     restriction is about writes, not reads.
 
-    Unpaginated. Threads are small; a cursor can be added later without
-    breaking this shape.
+    ``limit`` defaults to 200, so pathological threads degrade to a
+    truncated response instead of hanging the endpoint. The parameter exists
+    from day one so a future cursor can remain response-shape compatible.
+
+    The soft-close write-friction precondition contract (428/409) carries
+    a head pin token like ``comment:<id>`` (never a bare boolean).
     """
     root_post_id = await _resolve_thread(db, post_id)
-    events = await thread_vote_history(db, root_post_id)
+    events = await thread_vote_history(db, root_post_id, limit=limit)
     return CloseVoteHistoryOut(
         root_post_id=root_post_id,
         events=[
