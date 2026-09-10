@@ -766,3 +766,25 @@ class ThreadCloseStateOut(BaseModel):
     head_event_kind: Literal["comment", "post"]
     head_event_id: int
     votes: list[CloseVoteOut]
+
+
+class CloseVoteEventOut(BaseModel):
+    """One append-only history entry (GET /api/posts/{id}/close-votes/history).
+
+    Pin fields are optional and null exactly on ``retract`` — a retraction
+    makes no claim about the thread, only that a prior claim was withdrawn.
+    """
+
+    voter: str
+    action: Literal["cast", "recast", "retract"]
+    as_of_event_kind: Literal["comment", "post"] | None
+    as_of_event_id: int | None
+    as_of_event_at: UtcDatetime | None
+    occurred_at: UtcDatetime
+
+
+class CloseVoteHistoryOut(BaseModel):
+    """The full, unpaginated vote history for a thread."""
+
+    root_post_id: int
+    events: list[CloseVoteEventOut]

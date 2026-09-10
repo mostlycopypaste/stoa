@@ -8,6 +8,7 @@ here — they land in follow-up PRs.
 import itertools
 
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.models import ThreadCloseVote
@@ -15,8 +16,10 @@ from stoa.services.close_votes import (
     cast_vote,
     get_thread_close_state,
     resolve_root_post_id,
+    retract_vote,
     thread_events,
     thread_participants,
+    thread_vote_history,
 )
 from tests.helpers import create_test_api_key
 
@@ -503,3 +506,145 @@ class TestDeletedPostsAreInvisible:
         state = await get_thread_close_state(db, root)
         assert state.soft_closed is False
         assert state.stale_vote_count == 2
+
+
+class TestVoteHistoryEvents:
+    """PRD: close_vote_events, append-only history alongside thread_close_votes."""
+
+    async def test_first_cast_writes_one_cast_event_matching_the_vote_pin(
+        self, client: AsyncClient, db: AsyncSession
+    ):
+        root = await _post(client, ALICE)
+        comment_id = await _comment(client, BOB, root)
+
+        vote, _ = await cast_vote(db, root, "alice@herd.ai")
+
+        history = await thread_vote_history(db, root)
+        assert len(history) == 1
+        assert history[0].action == "cast"
+        assert history[0].voter == "alice@herd.ai"
+        assert history[0].as_of_event_kind == vote.as_of_event_kind == "comment"
+        assert history[0].as_of_event_id == vote.as_of_event_id == comment_id
+
+    async def test_recast_writes_a_recast_event_and_old_pin_survives(
+        self, client: AsyncClient, db: AsyncSession
+    ):
+        """The regression test for the actual defect: the first row's pin must
+        still point at the old head after a recast, not be overwritten."""
+        root = await _post(client, ALICE)
+        comment_id = await _comment(client, BOB, root)
+        await cast_vote(db, root, "alice@herd.ai")
+
+        await _post(client, BOB, subject="Re: Root", parent_post_id=root)
+        await cast_vote(db, root, "alice@herd.ai")
+
+        history = await thread_vote_history(db, root)
+        assert len(history) == 2
+        assert [e.action for e in history] == ["cast", "recast"]
+        assert history[0].as_of_event_kind == "comment"
+        assert history[0].as_of_event_id == comment_id, (
+            "the first event's pin must still point at the OLD head"
+        )
+        assert history[1].as_of_event_kind == "post"
+
+    async def test_retract_writes_retract_event_with_null_pin(
+        self, client: AsyncClient, db: AsyncSession
+    ):
+        root = await _post(client, ALICE)
+        await _comment(client, BOB, root)
+        await cast_vote(db, root, "alice@herd.ai")
+
+        assert await retract_vote(db, root, "alice@herd.ai") is True
+
+        history = await thread_vote_history(db, root)
+        assert [e.action for e in history] == ["cast", "retract"]
+        retract_event = history[-1]
+        assert retract_event.as_of_event_kind is None
+        assert retract_event.as_of_event_id is None
+        assert retract_event.as_of_event_at is None
+
+        vote_result = await db.execute(
+            select(ThreadCloseVote).where(
+                ThreadCloseVote.root_post_id == root,
+                ThreadCloseVote.voter == "alice@herd.ai",
+            )
+        )
+        assert vote_result.scalar_one_or_none() is None, "current-position row must be gone"
+
+    async def test_cast_retract_cast_produces_ordered_history(
+        self, client: AsyncClient, db: AsyncSession
+    ):
+        """A third party can tell this apart from a single cast."""
+        root = await _post(client, ALICE)
+        await _comment(client, BOB, root)
+
+        await cast_vote(db, root, "alice@herd.ai")
+        await retract_vote(db, root, "alice@herd.ai")
+        await cast_vote(db, root, "alice@herd.ai")
+
+        history = await thread_vote_history(db, root)
+        assert [e.action for e in history] == ["cast", "retract", "cast"]
+
+    async def test_current_position_table_still_one_row_per_voter_throughout(
+        self, client: AsyncClient, db: AsyncSession
+    ):
+        """The unique constraint is the property being protected."""
+        root = await _post(client, ALICE)
+        await _comment(client, BOB, root)
+
+        await cast_vote(db, root, "alice@herd.ai")
+        await _post(client, BOB, subject="Re: Root", parent_post_id=root)
+        await cast_vote(db, root, "alice@herd.ai")
+        await retract_vote(db, root, "alice@herd.ai")
+        await cast_vote(db, root, "alice@herd.ai")
+
+        vote_result = await db.execute(
+            select(ThreadCloseVote).where(
+                ThreadCloseVote.root_post_id == root,
+                ThreadCloseVote.voter == "alice@herd.ai",
+            )
+        )
+        assert len(vote_result.scalars().all()) == 1
+
+    async def test_history_endpoint_resolves_from_a_reply_post(self, client: AsyncClient):
+        root = await _post(client, ALICE)
+        reply = await _post(client, BOB, subject="Re: Root", parent_post_id=root)
+        await client.post(f"/api/posts/{root}/close-votes", headers=ALICE)
+
+        resp = await client.get(f"/api/posts/{reply}/close-votes/history", headers=BOB)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["root_post_id"] == root
+        assert len(data["events"]) == 1
+        assert data["events"][0]["action"] == "cast"
+
+    async def test_history_ordered_oldest_first_and_includes_every_voter(self, client: AsyncClient):
+        root = await _post(client, ALICE)
+        await _comment(client, BOB, root)
+
+        await client.post(f"/api/posts/{root}/close-votes", headers=ALICE)
+        await client.post(f"/api/posts/{root}/close-votes", headers=BOB)
+
+        resp = await client.get(f"/api/posts/{root}/close-votes/history", headers=ALICE)
+        events = resp.json()["events"]
+        voters = {e["voter"] for e in events}
+        assert voters == {"alice@herd.ai", "bob@herd.ai"}
+        timestamps = [e["occurred_at"] for e in events]
+        assert timestamps == sorted(timestamps)
+
+    async def test_deleting_head_post_does_not_mutate_past_events(
+        self, client: AsyncClient, db: AsyncSession
+    ):
+        """History is about what happened, not about what is currently visible."""
+        root = await _post(client, ALICE)
+        await _comment(client, BOB, root)
+        reply = await _post(client, BOB, subject="Re: Root", parent_post_id=root)
+        await cast_vote(db, root, "alice@herd.ai")
+
+        before = await thread_vote_history(db, root)
+
+        resp = await client.delete(f"/api/posts/{reply}", headers=BOB)
+        assert resp.status_code in (200, 204), resp.text
+
+        after = await thread_vote_history(db, root)
+        assert after == before, "deleting a post must not mutate or remove past events"

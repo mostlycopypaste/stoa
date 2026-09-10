@@ -527,3 +527,65 @@ class ThreadCloseVote(Base):
             f"<ThreadCloseVote(id={self.id}, root_post_id={self.root_post_id}, "
             f"voter='{self.voter}')>"
         )
+
+
+# Actions a close_vote_events row can record.
+CLOSE_VOTE_EVENT_CAST = "cast"
+CLOSE_VOTE_EVENT_RECAST = "recast"
+CLOSE_VOTE_EVENT_RETRACT = "retract"
+
+
+class CloseVoteEvent(Base):
+    """Append-only history of a vote-to-close action (issue #104, PRD follow-up).
+
+    ``thread_close_votes`` deliberately holds only the *current* position, one
+    row per (thread, voter), enforced by a unique constraint so the majority
+    check stays a cheap count instead of a group-by-max on every read. That
+    property is worth protecting, but recasting updates the row in place, and
+    a review fix after PR #106 moved ``created_at`` forward on recast to stop
+    the row contradicting its own pin. That made the row self-consistent and
+    erased the fact that a recast happened: a third party could no longer
+    tell a first cast from a fifth, and a retraction left no trace at all.
+
+    This table exists to carry that history without touching the current-
+    position table's shape. It is append-only — never updated, never deleted
+    — and neither table is derivable from the other: this one is the record
+    of what happened, the other is the record of what is currently claimed.
+
+    ``as_of_event_*`` is null exactly on ``retract``. A retraction is not
+    pinned to a thread head: nothing is being claimed about the thread, only
+    that a prior claim was withdrawn, so synthesizing a pin here would assert
+    an availability bound that was never observed.
+    """
+
+    __tablename__ = "close_vote_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    root_post_id: Mapped[int] = mapped_column(ForeignKey("posts.id", ondelete="CASCADE"))
+    voter: Mapped[str] = mapped_column(String(255))
+    action: Mapped[str] = mapped_column(String(16))
+    as_of_event_kind: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    as_of_event_id: Mapped[int | None] = mapped_column(nullable=True)
+    as_of_event_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(
+        default=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "action IN ('cast', 'recast', 'retract')",
+            name="check_close_vote_event_action",
+        ),
+        CheckConstraint(
+            "as_of_event_kind IS NULL OR as_of_event_kind IN ('comment', 'post')",
+            name="check_close_vote_event_pin_kind",
+        ),
+        Index("idx_close_vote_events_root_post_id", "root_post_id"),
+        Index("idx_close_vote_events_thread_voter", "root_post_id", "voter"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<CloseVoteEvent(id={self.id}, root_post_id={self.root_post_id}, "
+            f"voter='{self.voter}', action='{self.action}')>"
+        )

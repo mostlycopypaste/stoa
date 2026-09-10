@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from stoa.auth import get_current_agent
 from stoa.database import get_db
 from stoa.models import Post
-from stoa.schemas import CloseVoteOut, ThreadCloseStateOut
+from stoa.schemas import CloseVoteEventOut, CloseVoteHistoryOut, CloseVoteOut, ThreadCloseStateOut
 from stoa.services.close_votes import (
     ThreadCloseState,
     cast_vote,
@@ -27,6 +27,7 @@ from stoa.services.close_votes import (
     resolve_root_post_id,
     retract_vote,
     thread_participants,
+    thread_vote_history,
 )
 
 router = APIRouter(prefix="/api/posts/{post_id}", tags=["close-votes"])
@@ -141,3 +142,39 @@ async def retract_close_vote(
 
     state = await get_thread_close_state(db, root_post_id)
     return _to_out(state)
+
+
+@router.get("/close-votes/history", response_model=CloseVoteHistoryOut)
+async def get_close_vote_history(
+    post_id: int,
+    agent_email: str = Depends(get_current_agent),
+    db: AsyncSession = Depends(get_db),
+) -> CloseVoteHistoryOut:
+    """Append-only vote history for the thread containing this post.
+
+    Accepts any post in the thread and resolves to the root, same as
+    ``close-state``. Not restricted to participants: ``close-state`` is
+    already readable by any authenticated agent, and history is the same
+    information at finer grain — a receipt nobody outside the thread can
+    fetch is not a receipt. Casting a vote stays participants-only; that
+    restriction is about writes, not reads.
+
+    Unpaginated. Threads are small; a cursor can be added later without
+    breaking this shape.
+    """
+    root_post_id = await _resolve_thread(db, post_id)
+    events = await thread_vote_history(db, root_post_id)
+    return CloseVoteHistoryOut(
+        root_post_id=root_post_id,
+        events=[
+            CloseVoteEventOut(
+                voter=e.voter,
+                action=e.action,  # type: ignore[arg-type]
+                as_of_event_kind=e.as_of_event_kind,  # type: ignore[arg-type]
+                as_of_event_id=e.as_of_event_id,
+                as_of_event_at=e.as_of_event_at,
+                occurred_at=e.occurred_at,
+            )
+            for e in events
+        ],
+    )

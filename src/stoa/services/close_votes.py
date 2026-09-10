@@ -33,8 +33,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.models import (
+    CLOSE_VOTE_EVENT_CAST,
+    CLOSE_VOTE_EVENT_RECAST,
+    CLOSE_VOTE_EVENT_RETRACT,
     THREAD_EVENT_COMMENT,
     THREAD_EVENT_POST,
+    CloseVoteEvent,
     Comment,
     Post,
     ThreadCloseVote,
@@ -78,6 +82,18 @@ class ThreadCloseState:
     head_event_kind: str
     head_event_id: int
     votes: list[VoteView]
+
+
+@dataclass(frozen=True)
+class VoteHistoryEvent:
+    """One append-only entry in a thread's vote history."""
+
+    voter: str
+    action: str
+    as_of_event_kind: str | None
+    as_of_event_id: int | None
+    as_of_event_at: datetime | None
+    occurred_at: datetime
 
 
 async def resolve_root_post_id(db: AsyncSession, post_id: int) -> int:
@@ -239,6 +255,11 @@ async def cast_vote(
     made before the event it is pinned to — a self-contradiction visible to any
     third party with no other context. One row means one claim, and the claim
     is the current one.
+
+    A ``cast`` or ``recast`` row is also appended to ``close_vote_events`` in
+    the same flush, so that history — which recast this in-place update would
+    otherwise erase — survives even though the current-position row does not
+    carry it.
     """
     kind, event_id, occurred_at = await _head_event(db, root_post_id)
 
@@ -261,12 +282,32 @@ async def cast_vote(
         vote.as_of_event_at = occurred_at
     vote.created_at = datetime.now(UTC).replace(tzinfo=None)
 
+    db.add(
+        CloseVoteEvent(
+            root_post_id=root_post_id,
+            voter=voter,
+            action=CLOSE_VOTE_EVENT_CAST if created else CLOSE_VOTE_EVENT_RECAST,
+            as_of_event_kind=kind,
+            as_of_event_id=event_id,
+            as_of_event_at=occurred_at,
+            occurred_at=vote.created_at,
+        )
+    )
+
     await db.flush()
     return vote, created
 
 
 async def retract_vote(db: AsyncSession, root_post_id: int, voter: str) -> bool:
-    """Withdraw a vote. Returns False if there was nothing to withdraw."""
+    """Withdraw a vote. Returns False if there was nothing to withdraw.
+
+    Hard-deletes the current-position row, same as before — "current position"
+    stays true by construction, and is not soft-deleted in parallel. A
+    ``retract`` row with a null pin is appended to ``close_vote_events``
+    instead: retracting is not a claim about the thread, only that a prior
+    claim was withdrawn, so the event trail carries the fact without a
+    synthesized pin.
+    """
     result = await db.execute(
         select(ThreadCloseVote).where(
             ThreadCloseVote.root_post_id == root_post_id,
@@ -277,8 +318,46 @@ async def retract_vote(db: AsyncSession, root_post_id: int, voter: str) -> bool:
     if vote is None:
         return False
     await db.delete(vote)
+    db.add(
+        CloseVoteEvent(
+            root_post_id=root_post_id,
+            voter=voter,
+            action=CLOSE_VOTE_EVENT_RETRACT,
+            as_of_event_kind=None,
+            as_of_event_id=None,
+            as_of_event_at=None,
+            occurred_at=datetime.now(UTC).replace(tzinfo=None),
+        )
+    )
     await db.flush()
     return True
+
+
+async def thread_vote_history(db: AsyncSession, root_post_id: int) -> list[VoteHistoryEvent]:
+    """Every vote event ever recorded for a thread, oldest first.
+
+    Not restricted to current participants or current voters: this is a
+    record of what happened, not of what is currently visible, so an event
+    for a voter who later retracted (or whose vote later went stale) still
+    appears here.
+    """
+    result = await db.execute(
+        select(CloseVoteEvent)
+        .where(CloseVoteEvent.root_post_id == root_post_id)
+        .order_by(CloseVoteEvent.occurred_at, CloseVoteEvent.id)
+    )
+    events = result.scalars().all()
+    return [
+        VoteHistoryEvent(
+            voter=e.voter,
+            action=e.action,
+            as_of_event_kind=e.as_of_event_kind,
+            as_of_event_id=e.as_of_event_id,
+            as_of_event_at=e.as_of_event_at,
+            occurred_at=e.occurred_at,
+        )
+        for e in events
+    ]
 
 
 async def get_thread_close_state(db: AsyncSession, root_post_id: int) -> ThreadCloseState:
