@@ -561,7 +561,7 @@ class CloseVoteEvent(Base):
     __tablename__ = "close_vote_events"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    root_post_id: Mapped[int] = mapped_column(ForeignKey("posts.id", ondelete="CASCADE"))
+    root_post_id: Mapped[int] = mapped_column(ForeignKey("posts.id", ondelete="RESTRICT"))
     voter: Mapped[str] = mapped_column(String(255))
     action: Mapped[str] = mapped_column(String(16))
     as_of_event_kind: Mapped[str | None] = mapped_column(String(16), nullable=True)

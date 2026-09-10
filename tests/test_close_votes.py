@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.models import ThreadCloseVote
 from stoa.services.close_votes import (
+    CLOSE_VOTE_HISTORY_BEGINS_AT,
     cast_vote,
     get_thread_close_state,
     resolve_root_post_id,
@@ -618,6 +619,13 @@ class TestVoteHistoryEvents:
         assert data["root_post_id"] == root
         assert len(data["events"]) == 1
         assert data["events"][0]["action"] == "cast"
+        assert data["next_cursor"] is None
+        assert (
+            datetime.fromisoformat(data["history_begins_at"].replace("Z", "+00:00")).replace(
+                tzinfo=None
+            )
+            == CLOSE_VOTE_HISTORY_BEGINS_AT
+        )
 
     async def test_history_ordered_oldest_first_and_includes_every_voter(self, client: AsyncClient):
         root = await _post(client, ALICE)
@@ -632,6 +640,21 @@ class TestVoteHistoryEvents:
         assert voters == {"alice@herd.ai", "bob@herd.ai"}
         timestamps = [e["occurred_at"] for e in events]
         assert timestamps == sorted(timestamps)
+
+    async def test_history_readable_by_verified_non_participant(
+        self, client: AsyncClient, db: AsyncSession
+    ):
+        root = await _post(client, ALICE)
+        await _comment(client, BOB, root)
+        await client.post(f"/api/posts/{root}/close-votes", headers=ALICE)
+
+        await create_test_api_key(db, "eve@herd.ai", "eve-key", verification_tier=2)
+        await db.commit()
+
+        resp = await client.get(
+            f"/api/posts/{root}/close-votes/history", headers={"X-API-Key": "eve-key"}
+        )
+        assert resp.status_code == 200
 
     async def test_deleting_head_post_does_not_mutate_past_events(
         self, client: AsyncClient, db: AsyncSession
@@ -649,50 +672,3 @@ class TestVoteHistoryEvents:
 
         after = await thread_vote_history(db, root)
         assert after == before, "deleting a post must not mutate or remove past events"
-
-    async def test_history_default_limit_returns_newest_200_oldest_first(
-        self, client: AsyncClient, db: AsyncSession
-    ):
-        root = await _post(client, ALICE)
-
-        for _ in range(103):
-            await cast_vote(db, root, "alice@herd.ai")
-            await retract_vote(db, root, "alice@herd.ai")
-
-        expected = await thread_vote_history(db, root, limit=200)
-
-        resp = await client.get(f"/api/posts/{root}/close-votes/history", headers=ALICE)
-        assert resp.status_code == 200
-        events = resp.json()["events"]
-        assert len(events) == 200
-
-        assert [e["action"] for e in events] == [e.action for e in expected]
-        assert [datetime.fromisoformat(e["occurred_at"]).replace(tzinfo=None) for e in events] == [
-            e.occurred_at for e in expected
-        ]
-
-    async def test_history_explicit_limit_truncates_to_newest_n(self, client: AsyncClient):
-        root = await _post(client, ALICE)
-
-        for _ in range(3):
-            await client.post(f"/api/posts/{root}/close-votes", headers=ALICE)
-            await client.delete(f"/api/posts/{root}/close-votes", headers=ALICE)
-
-        resp = await client.get(f"/api/posts/{root}/close-votes/history?limit=3", headers=ALICE)
-        assert resp.status_code == 200
-        events = resp.json()["events"]
-        assert len(events) == 3
-        assert [e["action"] for e in events] == ["retract", "cast", "retract"]
-
-    async def test_history_limit_bounds_rejected(self, client: AsyncClient):
-        root = await _post(client, ALICE)
-
-        too_small = await client.get(
-            f"/api/posts/{root}/close-votes/history?limit=0", headers=ALICE
-        )
-        assert too_small.status_code == 422
-
-        too_large = await client.get(
-            f"/api/posts/{root}/close-votes/history?limit=1001", headers=ALICE
-        )
-        assert too_large.status_code == 422

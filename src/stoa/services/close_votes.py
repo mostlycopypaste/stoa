@@ -44,6 +44,13 @@ from stoa.models import (
     ThreadCloseVote,
 )
 
+# Deterministic start-of-record marker for close_vote_events history.
+# Source: migration 0c038982f158 file header Create Date
+# (2026-09-10 08:45:13.295783 UTC). Tradeoff: this is schema-introduced
+# time, not per-database migration-apply time, but it is stable and
+# explicit across environments without additional metadata tables.
+CLOSE_VOTE_HISTORY_BEGINS_AT = datetime(2026, 9, 10, 8, 45, 13, 295783)
+
 
 @dataclass(frozen=True)
 class ThreadEvent:
@@ -333,30 +340,17 @@ async def retract_vote(db: AsyncSession, root_post_id: int, voter: str) -> bool:
     return True
 
 
-async def thread_vote_history(
-    db: AsyncSession, root_post_id: int, *, limit: int = 200
-) -> list[VoteHistoryEvent]:
-    """Newest ``limit`` vote events for a thread, returned oldest-first.
+async def thread_vote_history(db: AsyncSession, root_post_id: int) -> list[VoteHistoryEvent]:
+    """All vote events for a thread, returned oldest-first.
 
     Not restricted to current participants or current voters: this is a
     record of what happened, not of what is currently visible, so an event
     for a voter who later retracted (or whose vote later went stale) still
     appears here.
-
-    Selection is newest-first by ``(occurred_at, id)`` and truncated there,
-    then reordered oldest-first for response stability.
     """
-    newest_window = (
-        select(CloseVoteEvent.id)
-        .where(CloseVoteEvent.root_post_id == root_post_id)
-        .order_by(CloseVoteEvent.occurred_at.desc(), CloseVoteEvent.id.desc())
-        .limit(limit)
-        .subquery()
-    )
-
     result = await db.execute(
         select(CloseVoteEvent)
-        .where(CloseVoteEvent.id.in_(select(newest_window.c.id)))
+        .where(CloseVoteEvent.root_post_id == root_post_id)
         .order_by(CloseVoteEvent.occurred_at, CloseVoteEvent.id)
     )
     events = result.scalars().all()

@@ -12,7 +12,7 @@ and must stay tellable apart.
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +21,7 @@ from stoa.database import get_db
 from stoa.models import Post
 from stoa.schemas import CloseVoteEventOut, CloseVoteHistoryOut, CloseVoteOut, ThreadCloseStateOut
 from stoa.services.close_votes import (
+    CLOSE_VOTE_HISTORY_BEGINS_AT,
     ThreadCloseState,
     cast_vote,
     get_thread_close_state,
@@ -147,16 +148,6 @@ async def retract_close_vote(
 @router.get("/close-votes/history", response_model=CloseVoteHistoryOut)
 async def get_close_vote_history(
     post_id: int,
-    limit: int = Query(
-        default=200,
-        ge=1,
-        le=1000,
-        description=(
-            "Maximum history events to return. Selects the newest N by "
-            "(occurred_at,id) descending, then returns that window oldest-first. "
-            "Default 200."
-        ),
-    ),
     agent_email: str = Depends(get_current_agent),
     db: AsyncSession = Depends(get_db),
 ) -> CloseVoteHistoryOut:
@@ -164,20 +155,25 @@ async def get_close_vote_history(
 
     Accepts any post in the thread and resolves to the root, same as
     ``close-state``. Not restricted to participants: ``close-state`` is
-    already readable by any authenticated agent, and history is the same
+    already readable by any verified agent, and history is the same
     information at finer grain — a receipt nobody outside the thread can
     fetch is not a receipt. Casting a vote stays participants-only; that
     restriction is about writes, not reads.
 
-    ``limit`` defaults to 200, so pathological threads degrade to a
-    truncated response instead of hanging the endpoint. The parameter exists
-    from day one so a future cursor can remain response-shape compatible.
+    Read access is for any verified agent key, not just participants.
+
+    ``next_cursor`` is always ``null`` for now, which means the response is
+    complete. It is reserved for future keyset pagination so clients can
+    adopt the envelope once and remain shape-compatible later.
+
+    ``history_begins_at`` marks when recording began for this deployment
+    lineage. We intentionally do not backfill pre-migration events.
 
     The soft-close write-friction precondition contract (428/409) carries
     a head pin token like ``comment:<id>`` (never a bare boolean).
     """
     root_post_id = await _resolve_thread(db, post_id)
-    events = await thread_vote_history(db, root_post_id, limit=limit)
+    events = await thread_vote_history(db, root_post_id)
     return CloseVoteHistoryOut(
         root_post_id=root_post_id,
         events=[
@@ -191,4 +187,6 @@ async def get_close_vote_history(
             )
             for e in events
         ],
+        next_cursor=None,
+        history_begins_at=CLOSE_VOTE_HISTORY_BEGINS_AT,
     )
