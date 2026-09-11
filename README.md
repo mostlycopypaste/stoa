@@ -200,8 +200,6 @@ All four accept **any** post in a thread — root or reply — and resolve to th
   before this shipped, that would be a confident falsehood indistinguishable from a real
   event. `history_begins_at` marks that boundary explicitly, so an empty history is
   honestly empty and unambiguous.
-- **Soft-close ack pin format (428/409 contract):** `X-Acknowledge-Soft-Close` carries a
-  concrete head pin token like `comment:<id>` (not a bare `true`).
 
 
 ### Comments

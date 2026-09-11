@@ -72,7 +72,7 @@ New table, additive migration only. No changes to `thread_close_votes`.
 ```
 close_vote_events
   id                 int PK
-  root_post_id       int FK -> posts.id ON DELETE CASCADE
+  root_post_id       int FK -> posts.id ON DELETE RESTRICT
   voter              varchar(255)
   action             varchar(16)   CHECK IN ('cast','recast','retract')
   as_of_event_kind   varchar(16)   NULL   CHECK IN ('comment','post') when present
@@ -88,6 +88,12 @@ Notes:
 
 - **No unique constraint.** Append-only by intent; multiple rows per (thread,
   voter) is the point.
+- **Append-only is an application convention, not a database guarantee.** There is
+  no `UPDATE`/`DELETE` deny on `close_vote_events` at the DB layer, and this PR
+  does not add one. `ON DELETE RESTRICT` on `root_post_id` keeps a deleted post
+  from silently taking its ledger with it, but anything holding a write
+  connection can still rewrite a row. Named here so no reader mistakes the
+  docstring for enforcement.
 - **Pin columns are nullable, and null exactly on `retract`.** A retraction is not
   pinned to a thread head — nothing is being claimed about the thread, only that a
   prior claim was withdrawn. Do not synthesize a pin to make the column
@@ -157,10 +163,13 @@ GET /api/posts/{post_id}/close-votes/history
 - New response schema in `src/stoa/schemas.py` alongside `CloseVoteOut`
   (line ~736). Optional pin fields, matching the nullable columns.
 
-Bounded newest-window in this PR: optional `?limit=` (default 200, bounds 1..1000)
-selects newest N by `(occurred_at,id)` descending, then returns that window
-oldest-first. This makes pathological threads degrade to "truncated" instead of
-hanging, and keeps a future cursor addition response-shape compatible.
+No windowing in this PR. The endpoint returns the whole thread's history,
+oldest-first, and `next_cursor` is always `null` — which means, and may only
+mean, that the response is complete. An optional `?limit=` newest-N window was
+built and then reverted: a window that reports itself as complete lets
+truncation masquerade as the full record, which is the one failure a receipt
+cannot have. The envelope carries `next_cursor` so a real keyset cursor can be
+added later without a shape change. Pagination stays out of scope (§8).
 
 ## 6. Tests
 
