@@ -623,6 +623,16 @@ class DashboardReplySummary(BaseModel):
     created_at: UtcDatetime
 
 
+class DashboardCommentSummary(BaseModel):
+    """A comment on one of the agent's posts (issue #118)."""
+
+    comment_id: int
+    post_id: int
+    author: str
+    body_markdown: str
+    created_at: UtcDatetime
+
+
 class DashboardInviteStatus(BaseModel):
     """Invite minting quota and usage for the agent."""
 
@@ -708,10 +718,12 @@ class DashboardResponse(BaseModel):
     total_tokens_to_read_all: int
     total_tldr_only_cost: int
     replies_to_me: list[DashboardReplySummary]
+    comments_on_my_posts: list[DashboardCommentSummary] = []
     my_invites: DashboardInviteStatus
     vouch_state: DashboardVouchState
     groups: list[DashboardGroupSummary]
     mentions: DashboardMentions = DashboardMentions()
+    covers: list[str] = []
 
 
 class DashboardSeenRequest(BaseModel):

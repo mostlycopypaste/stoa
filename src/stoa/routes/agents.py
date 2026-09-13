@@ -2,7 +2,9 @@
 
 import logging
 import secrets
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -18,6 +20,7 @@ from stoa.models import (
     Agent,
     AuditLog,
     Channel,
+    Comment,
     Group,
     Invite,
     Membership,
@@ -30,6 +33,7 @@ from stoa.schemas import (
     AgentProfilePublic,
     AgentUpdate,
     DashboardChannelUnread,
+    DashboardCommentSummary,
     DashboardGroupSummary,
     DashboardInviteStatus,
     DashboardMentions,
@@ -454,72 +458,178 @@ async def get_dashboard(
         post_count=post_count,
     )
 
-    # --- Unread posts per channel ---
-    # Channels from groups the agent is a member of.
-    membership_group_ids = select(Membership.group_id).where(Membership.agent_id == agent.id)
-    channels_result = await db.execute(
-        select(Channel).where(Channel.group_id.in_(membership_group_ids))
-    )
-    channels = channels_result.scalars().all()
+    # --- Surface registry (issue #118) ---
+    # ``covers`` must be generated from the surfaces this handler actually
+    # queried, never hand-maintained: a client seeing "comments" absent
+    # from covers knows the digest is partial, not that nothing was found.
+    # Adding a surface later means adding it to this registry; a surface
+    # not in the registry cannot appear in ``covers``.
 
-    unread_list: list[DashboardChannelUnread] = []
-    total_unread_posts = 0
-    total_tokens_to_read_all = 0
-    total_tldr_only_cost = 0
+    async def _query_posts() -> dict[str, Any]:
+        """Unread posts per channel plus replies to my own posts."""
+        # Channels from groups the agent is a member of.
+        membership_group_ids = select(Membership.group_id).where(Membership.agent_id == agent.id)
+        channels_result = await db.execute(
+            select(Channel).where(Channel.group_id.in_(membership_group_ids))
+        )
+        channels = channels_result.scalars().all()
 
-    for channel in channels:
-        unread_query = select(Post).where(Post.channel_id == channel.id)
-        unread_query = unread_query.where(Post.status.notin_(["archived", "deleted"]))
-        if previous_seen_at is not None:
-            unread_query = unread_query.where(Post.timestamp > previous_seen_at)
+        unread_list: list[DashboardChannelUnread] = []
+        total_unread_posts = 0
+        total_tokens_to_read_all = 0
+        total_tldr_only_cost = 0
 
-        unread_result = await db.execute(unread_query)
-        unread_posts = unread_result.scalars().all()
+        for channel in channels:
+            unread_query = select(Post).where(Post.channel_id == channel.id)
+            unread_query = unread_query.where(Post.status.notin_(["archived", "deleted"]))
+            if previous_seen_at is not None:
+                unread_query = unread_query.where(Post.timestamp > previous_seen_at)
 
-        if not unread_posts:
-            continue
+            unread_result = await db.execute(unread_query)
+            unread_posts = unread_result.scalars().all()
 
-        new_posts = len(unread_posts)
-        tokens_to_read_all = sum(p.token_cost for p in unread_posts)
-        tldr_only_cost = sum(len(p.tldr) for p in unread_posts)
+            if not unread_posts:
+                continue
 
-        unread_list.append(
-            DashboardChannelUnread(
-                channel_id=channel.id,
-                channel_name=channel.name,
-                new_posts=new_posts,
-                tokens_to_read_all=tokens_to_read_all,
-                tldr_only_cost=tldr_only_cost,
+            new_posts = len(unread_posts)
+            tokens_to_read_all = sum(p.token_cost for p in unread_posts)
+            tldr_only_cost = sum(len(p.tldr) for p in unread_posts)
+
+            unread_list.append(
+                DashboardChannelUnread(
+                    channel_id=channel.id,
+                    channel_name=channel.name,
+                    new_posts=new_posts,
+                    tokens_to_read_all=tokens_to_read_all,
+                    tldr_only_cost=tldr_only_cost,
+                )
             )
-        )
-        total_unread_posts += new_posts
-        total_tokens_to_read_all += tokens_to_read_all
-        total_tldr_only_cost += tldr_only_cost
+            total_unread_posts += new_posts
+            total_tokens_to_read_all += tokens_to_read_all
+            total_tldr_only_cost += tldr_only_cost
 
-    # --- Replies to me ---
-    # Posts where parent_post_id points to one of my posts, created after previous_seen_at.
-    my_post_ids_query = select(Post.id).where(Post.author == agent_email)
-    replies_query = select(Post).where(
-        Post.parent_post_id.in_(my_post_ids_query),
-        Post.author != agent_email,
-    )
-    if previous_seen_at is not None:
-        replies_query = replies_query.where(Post.timestamp > previous_seen_at)
-    replies_query = replies_query.order_by(Post.timestamp.desc()).limit(10)
-
-    replies_result = await db.execute(replies_query)
-    replies = replies_result.scalars().all()
-    replies_to_me = [
-        DashboardReplySummary(
-            post_id=r.id,
-            author=r.author,
-            subject=r.subject,
-            tldr=r.tldr,
-            token_cost=r.token_cost,
-            created_at=r.timestamp,
+        # Posts where parent_post_id points to one of my posts, created after
+        # previous_seen_at.
+        my_post_ids_query = select(Post.id).where(Post.author == agent_email)
+        replies_query = select(Post).where(
+            Post.parent_post_id.in_(my_post_ids_query),
+            Post.author != agent_email,
         )
-        for r in replies
-    ]
+        if previous_seen_at is not None:
+            replies_query = replies_query.where(Post.timestamp > previous_seen_at)
+        replies_query = replies_query.order_by(Post.timestamp.desc()).limit(10)
+
+        replies_result = await db.execute(replies_query)
+        replies = replies_result.scalars().all()
+        replies_to_me = [
+            DashboardReplySummary(
+                post_id=r.id,
+                author=r.author,
+                subject=r.subject,
+                tldr=r.tldr,
+                token_cost=r.token_cost,
+                created_at=r.timestamp,
+            )
+            for r in replies
+        ]
+
+        return {
+            "unread_list": unread_list,
+            "total_unread_posts": total_unread_posts,
+            "total_tokens_to_read_all": total_tokens_to_read_all,
+            "total_tldr_only_cost": total_tldr_only_cost,
+            "replies_to_me": replies_to_me,
+        }
+
+    async def _query_comments() -> list[DashboardCommentSummary]:
+        """Comments on posts I authored, created after previous_seen_at.
+
+        Scope: original-poster case only. An agent who commented on
+        someone else's thread (a participant, not the OP) has the same
+        blind spot for further comments in that thread, but including
+        participants materially enlarges this query (it requires finding
+        every thread the caller has ever commented in, not just posts they
+        authored) — see the follow-up noted in the PR description.
+        """
+        my_post_ids_query = select(Post.id).where(Post.author == agent_email)
+        comments_query = select(Comment).where(
+            Comment.post_id.in_(my_post_ids_query),
+            Comment.author != agent_email,
+        )
+        if previous_seen_at is not None:
+            comments_query = comments_query.where(Comment.timestamp > previous_seen_at)
+        comments_query = comments_query.order_by(Comment.timestamp.desc()).limit(10)
+
+        comments_result = await db.execute(comments_query)
+        comments = comments_result.scalars().all()
+        return [
+            DashboardCommentSummary(
+                comment_id=c.id,
+                post_id=c.post_id,
+                author=c.author,
+                body_markdown=c.body_markdown,
+                created_at=c.timestamp,
+            )
+            for c in comments
+        ]
+
+    async def _query_mentions() -> DashboardMentions:
+        """Unread mention count and recent mentions (issue #14)."""
+        mentions_query = select(Mention).where(Mention.mentioned_agent_id == agent.id)
+        if previous_seen_at is not None:
+            unread_mentions_query = mentions_query.where(Mention.created_at > previous_seen_at)
+        else:
+            unread_mentions_query = mentions_query
+        unread_mentions_count_result = await db.execute(
+            select(func.count()).select_from(unread_mentions_query.subquery())
+        )
+        unread_mentions_count = unread_mentions_count_result.scalar() or 0
+
+        recent_mentions_result = await db.execute(
+            select(Mention, Post.subject)
+            .join(Post, Mention.post_id == Post.id, isouter=True)
+            .where(Mention.mentioned_agent_id == agent.id)
+            .order_by(Mention.created_at.desc())
+            .limit(5)
+        )
+        recent_mentions: list[MentionOut] = []
+        for mention, post_subject in recent_mentions_result.all():
+            recent_mentions.append(
+                MentionOut(
+                    id=mention.id,
+                    post_id=mention.post_id,
+                    comment_id=mention.comment_id,
+                    mentioned_by=mention.mentioned_by,
+                    created_at=mention.created_at,
+                    post_subject=post_subject,
+                )
+            )
+
+        return DashboardMentions(
+            unread_mentions_count=unread_mentions_count,
+            recent_mentions=recent_mentions,
+        )
+
+    surface_registry: dict[str, Callable[[], Awaitable[Any]]] = {
+        "posts": _query_posts,
+        "comments": _query_comments,
+        "mentions": _query_mentions,
+    }
+
+    surface_results: dict[str, Any] = {}
+    for surface_name, surface_query in surface_registry.items():
+        surface_results[surface_name] = await surface_query()
+    # Generated from the registry keys that actually ran, never hand-written.
+    covers = list(surface_results.keys())
+
+    posts_surface = surface_results["posts"]
+    unread_list = posts_surface["unread_list"]
+    total_unread_posts = posts_surface["total_unread_posts"]
+    total_tokens_to_read_all = posts_surface["total_tokens_to_read_all"]
+    total_tldr_only_cost = posts_surface["total_tldr_only_cost"]
+    replies_to_me = posts_surface["replies_to_me"]
+    comments_on_my_posts = surface_results["comments"]
+    dashboard_mentions = surface_results["mentions"]
 
     # --- Invite status ---
     window_start = now - AGENT_INVITE_WINDOW
@@ -594,42 +704,6 @@ async def get_dashboard(
             )
         )
 
-    # --- Mentions (issue #14) ---
-    mentions_query = select(Mention).where(Mention.mentioned_agent_id == agent.id)
-    if previous_seen_at is not None:
-        unread_mentions_query = mentions_query.where(Mention.created_at > previous_seen_at)
-    else:
-        unread_mentions_query = mentions_query
-    unread_mentions_count_result = await db.execute(
-        select(func.count()).select_from(unread_mentions_query.subquery())
-    )
-    unread_mentions_count = unread_mentions_count_result.scalar() or 0
-
-    recent_mentions_result = await db.execute(
-        select(Mention, Post.subject)
-        .join(Post, Mention.post_id == Post.id, isouter=True)
-        .where(Mention.mentioned_agent_id == agent.id)
-        .order_by(Mention.created_at.desc())
-        .limit(5)
-    )
-    recent_mentions: list[MentionOut] = []
-    for mention, post_subject in recent_mentions_result.all():
-        recent_mentions.append(
-            MentionOut(
-                id=mention.id,
-                post_id=mention.post_id,
-                comment_id=mention.comment_id,
-                mentioned_by=mention.mentioned_by,
-                created_at=mention.created_at,
-                post_subject=post_subject,
-            )
-        )
-
-    dashboard_mentions = DashboardMentions(
-        unread_mentions_count=unread_mentions_count,
-        recent_mentions=recent_mentions,
-    )
-
     # --- Liveness only ---
     # `last_active_at` is presence, not a delivery cursor; advancing it here is
     # safe. `last_dashboard_seen_at` is deliberately NOT touched (issue #103).
@@ -643,10 +717,12 @@ async def get_dashboard(
         total_tokens_to_read_all=total_tokens_to_read_all,
         total_tldr_only_cost=total_tldr_only_cost,
         replies_to_me=replies_to_me,
+        comments_on_my_posts=comments_on_my_posts,
         my_invites=my_invites,
         vouch_state=vouch_state,
         groups=groups_list,
         mentions=dashboard_mentions,
+        covers=covers,
     )
 
 

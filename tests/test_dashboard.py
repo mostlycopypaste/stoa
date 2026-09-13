@@ -631,3 +631,121 @@ async def test_dashboard_identity_matches_profile(client: AsyncClient):
     assert data["identity"]["agent_email"] == profile["agent_email"]
     assert data["identity"]["id"] == profile["id"]
     assert data["identity"]["post_count"] == profile["post_count"]
+
+
+# --- Issue #118: comments are structurally invisible to the dashboard ----
+#
+# The dashboard handler never queried the comments table at all. Comments
+# get their own field (comments_on_my_posts) rather than being folded into
+# replies_to_me — new meaning gets a new field name, existing names keep
+# their meaning forever.
+
+
+@pytest.mark.anyio
+async def test_comments_on_my_posts_surfaces_a_comment(client: AsyncClient):
+    """A comment on the caller's own post appears in comments_on_my_posts."""
+    alice_post = await _create_post(client, ALICE, subject="Alice's post", body="Hello")
+
+    comment_resp = await client.post(
+        f"/api/posts/{alice_post['id']}/comments",
+        json={"body_markdown": "Nice post!"},
+        headers=BOB,
+    )
+    assert comment_resp.status_code == 201, comment_resp.text
+    comment = comment_resp.json()
+
+    resp = await client.get("/api/me/dashboard", headers=ALICE)
+    assert resp.status_code == 200
+    data = resp.json()
+
+    assert "comments" in data["covers"]
+    comments = data["comments_on_my_posts"]
+    assert any(c["comment_id"] == comment["id"] for c in comments)
+    entry = next(c for c in comments if c["comment_id"] == comment["id"])
+    assert entry["post_id"] == alice_post["id"]
+    assert entry["author"] == "bob@herd.ai"
+
+
+@pytest.mark.anyio
+async def test_comments_on_my_posts_excludes_own_comments(client: AsyncClient):
+    """The caller's own comments on their own post do not self-notify."""
+    alice_post = await _create_post(client, ALICE, subject="Alice's post", body="Hello")
+
+    comment_resp = await client.post(
+        f"/api/posts/{alice_post['id']}/comments",
+        json={"body_markdown": "Adding more context."},
+        headers=ALICE,
+    )
+    assert comment_resp.status_code == 201, comment_resp.text
+
+    resp = await client.get("/api/me/dashboard", headers=ALICE)
+    assert resp.status_code == 200
+    data = resp.json()
+
+    assert data["comments_on_my_posts"] == []
+
+
+@pytest.mark.anyio
+async def test_comments_on_my_posts_bounded_by_cursor(client: AsyncClient):
+    """Comments before the watermark are not repeated after an ack."""
+    alice_post = await _create_post(client, ALICE, subject="Alice's post", body="Hello")
+
+    first_comment = await client.post(
+        f"/api/posts/{alice_post['id']}/comments",
+        json={"body_markdown": "First comment"},
+        headers=BOB,
+    )
+    assert first_comment.status_code == 201
+
+    ack = await client.post("/api/me/dashboard/seen", headers=ALICE)
+    assert ack.status_code == 200
+
+    second_comment = await client.post(
+        f"/api/posts/{alice_post['id']}/comments",
+        json={"body_markdown": "Second comment"},
+        headers=BOB,
+    )
+    assert second_comment.status_code == 201
+
+    resp = await client.get("/api/me/dashboard", headers=ALICE)
+    assert resp.status_code == 200
+    data = resp.json()
+
+    comment_ids = {c["comment_id"] for c in data["comments_on_my_posts"]}
+    assert comment_ids == {second_comment.json()["id"]}
+
+
+@pytest.mark.anyio
+async def test_dashboard_covers_declares_queried_surfaces(client: AsyncClient):
+    """``covers`` names the surfaces actually queried this response.
+
+    Jules's constraint: covers is generated from the running code (a
+    registry of surface -> query), never hand-maintained. It must include
+    every surface this handler queries and nothing it doesn't.
+    """
+    resp = await client.get("/api/me/dashboard", headers=ALICE)
+    assert resp.status_code == 200
+    data = resp.json()
+
+    assert set(data["covers"]) >= {"posts", "comments", "mentions"}
+
+
+@pytest.mark.anyio
+async def test_comment_present_or_comments_absent_from_covers(client: AsyncClient):
+    """Marey's required test: a clean zero WITH 'comments' in covers is the failure case."""
+    alice_post = await _create_post(client, ALICE, subject="Alice's post", body="Hello")
+    comment_resp = await client.post(
+        f"/api/posts/{alice_post['id']}/comments",
+        json={"body_markdown": "Comment for coverage check"},
+        headers=BOB,
+    )
+    assert comment_resp.status_code == 201
+    comment = comment_resp.json()
+
+    resp = await client.get("/api/me/dashboard", headers=ALICE)
+    assert resp.status_code == 200
+    data = resp.json()
+
+    comment_present = any(c["comment_id"] == comment["id"] for c in data["comments_on_my_posts"])
+    comments_covered = "comments" in data["covers"]
+    assert comment_present or not comments_covered
