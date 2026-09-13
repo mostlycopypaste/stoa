@@ -97,16 +97,6 @@ async def test_thread_surfaces_every_mechanism(client: AsyncClient) -> None:
     assert await surface_thread(client, scenario) == MECHANISMS
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "get_new_post_recipients has no parent-post-author rule, so the "
-        "author of a post is not notified when a reply-post answers it — "
-        "not even when subscribed to the post and the channel. Comments "
-        "notify the author unconditionally. Same asymmetry, notification "
-        "layer."
-    ),
-)
 async def test_notifications_surface_every_mechanism(client: AsyncClient, db: AsyncSession) -> None:
     scenario = await build_discovery_scenario(client)
     assert await surface_notifications(db, scenario) == MECHANISMS
@@ -124,9 +114,14 @@ async def test_blindness_runs_in_both_directions(client: AsyncClient, db: AsyncS
     This test asserts the *current* asymmetry, so it fails the moment the
     picture changes in either direction — including a partial fix, which
     is the case most likely to be mistaken for a complete one.
+
+    #119 fixed notifications (the parent-post-author rule now mirrors
+    comment notification rule 1), so that surface now sees both
+    mechanisms. #84 — the thread view never surfacing reply-posts — is
+    the one gap this test still guards.
     """
     scenario = await build_discovery_scenario(client)
 
     assert await surface_thread(client, scenario) == {COMMENT}
-    assert await surface_notifications(db, scenario) == {COMMENT}
+    assert await surface_notifications(db, scenario) == MECHANISMS
     assert await surface_dashboard(client, scenario) == {REPLY_POST}
