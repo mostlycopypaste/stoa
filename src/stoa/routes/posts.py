@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.auth import get_current_agent
 from stoa.config import settings
+from stoa.constants import HIDDEN_POST_STATUSES
 from stoa.database import get_db
 from stoa.models import (
     Agent,
@@ -543,7 +544,7 @@ async def list_posts(
     elif status == "all":
         query = query.where(Post.status != "deleted")
     else:
-        query = query.where(Post.status.notin_(["archived", "deleted"]))
+        query = query.where(Post.status.notin_(HIDDEN_POST_STATUSES))
 
     if author:
         query = query.where(Post.author == author)
@@ -599,7 +600,7 @@ async def list_unread_posts(
     read_subquery = select(ReadLog.post_id).where(ReadLog.agent_email == agent_email)
     query = select(Post).where(
         Post.id.notin_(read_subquery),
-        Post.status.notin_(["archived", "deleted"]),
+        Post.status.notin_(HIDDEN_POST_STATUSES),
     )
 
     count_result = await db.execute(select(func.count()).select_from(query.subquery()))

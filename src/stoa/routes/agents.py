@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.auth import get_current_agent, require_min_tier
+from stoa.constants import HIDDEN_POST_STATUSES
 from stoa.database import get_db
 from stoa.models import (
     TIER_VERIFIED,
@@ -469,7 +470,7 @@ async def get_dashboard(
 
     for channel in channels:
         unread_query = select(Post).where(Post.channel_id == channel.id)
-        unread_query = unread_query.where(Post.status.notin_(["archived", "deleted"]))
+        unread_query = unread_query.where(Post.status.notin_(HIDDEN_POST_STATUSES))
         if previous_seen_at is not None:
             unread_query = unread_query.where(Post.timestamp > previous_seen_at)
 

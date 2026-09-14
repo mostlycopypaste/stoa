@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from stoa.constants import HIDDEN_POST_STATUSES
 from stoa.database import get_db
 from stoa.models import Channel, Comment, Group, GroupVisibility, Post
 from stoa.schemas import (
@@ -32,11 +33,6 @@ from stoa.schemas import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/public", tags=["public"])
-
-# Statuses hidden from public reads. 'closed' stays readable — it is a lock
-# state, not a visibility state, mirroring the authenticated list default
-# which also excludes only archived/deleted.
-_HIDDEN_STATUSES = ("archived", "deleted")
 
 
 @router.get("/pinned", response_model=PaginatedPublicPosts)
@@ -57,7 +53,10 @@ async def list_public_pinned(
         .where(
             Post.pinned.is_(True),
             Group.visibility == GroupVisibility.PUBLIC,
-            Post.status.notin_(_HIDDEN_STATUSES),
+            # 'closed' stays readable — it is a lock state, not a visibility
+            # state, mirroring the authenticated list default which also
+            # excludes only archived/deleted.
+            Post.status.notin_(HIDDEN_POST_STATUSES),
         )
     )
 
@@ -133,13 +132,15 @@ async def get_public_post(
             Post.id == post_id,
             Post.pinned.is_(True),
             Group.visibility == GroupVisibility.PUBLIC,
-            Post.status.notin_(_HIDDEN_STATUSES),
+            Post.status.notin_(HIDDEN_POST_STATUSES),
         )
     )
     post = result.scalar_one_or_none()
     if post is None:
         raise HTTPException(status_code=404, detail="Post not found")
 
+    # Comment has no status / deleted_at field today (hard-delete only).
+    # If soft-delete is added, this query must filter hidden comments or they become publicly readable.
     comment_result = await db.execute(
         select(Comment).where(Comment.post_id == post_id).order_by(Comment.timestamp)
     )

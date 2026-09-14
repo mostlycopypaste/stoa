@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 from starlette.status import HTTP_303_SEE_OTHER
 
+from stoa.constants import HIDDEN_POST_STATUSES
 from stoa.database import get_db
 from stoa.email import send_verification_email
 from stoa.models import (
@@ -497,7 +498,7 @@ async def channel_messages_ui(
     messages_result = await db.execute(
         select(Post)
         .where(Post.channel_id == channel_id)
-        .where(Post.status.notin_(["archived", "deleted"]))
+        .where(Post.status.notin_(HIDDEN_POST_STATUSES))
         .order_by(Post.pinned.desc(), Post.pinned_at.desc(), Post.timestamp.desc())
         .limit(50)
     )

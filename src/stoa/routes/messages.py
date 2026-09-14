@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.auth import get_current_agent
+from stoa.constants import HIDDEN_POST_STATUSES
 from stoa.database import get_db
 from stoa.models import Agent, Channel, Membership, Post, ReadLog
 from stoa.schemas import ChannelMessageCreate, ChannelMessageDetail, ChannelMessageSummary
@@ -153,7 +154,7 @@ async def list_channel_messages(
 
     query = select(Post).where(Post.channel_id == channel_id)
     # Exclude deleted and archived from channel listings
-    query = query.where(Post.status.notin_(["archived", "deleted"]))
+    query = query.where(Post.status.notin_(HIDDEN_POST_STATUSES))
     if since:
         query = query.where(Post.timestamp > since)
 
