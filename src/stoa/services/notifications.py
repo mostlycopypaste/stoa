@@ -220,28 +220,71 @@ async def get_new_post_recipients(
     post: Post,
     post_author_email: str,
 ) -> list[tuple[str, int, str]]:
-    """Determine who should be notified about a new post in a channel.
+    """Determine who should be notified about a new post.
 
-    Only agents with ``notification_scope = "all"`` who subscribe to the
-    channel are notified about new posts (not replies).
+    Rules:
+    1. If this post is a reply (``parent_post_id`` is set), the parent
+       post's author is always a recipient (unless they wrote this
+       reply) — this mirrors ``get_comment_recipients`` rule 1.
+    2. Agents with ``notification_scope = "all"`` who subscribe to the
+       channel are notified about new posts (not replies).
+    3. Filter by ``notification_scope``:
+       - ``"off"`` — excluded
+       - ``"replies_only"`` — included only if they are the parent post
+         author (candidate 1); channel subscribers are excluded
+       - ``"all"`` — included
+    4. Exclude the post author.
     """
-    if post.channel_id is None:
+    candidates: dict[str, str] = {}  # email -> reason
+
+    # 1. Parent post author (issue #119)
+    if post.parent_post_id is not None:
+        parent_result = await db.execute(select(Post).where(Post.id == post.parent_post_id))
+        parent_post = parent_result.scalar_one_or_none()
+        if parent_post is not None and parent_post.author != post_author_email:
+            candidates[parent_post.author] = "authored the post this replies to"
+
+    # 2. Channel subscribers
+    if post.channel_id is not None:
+        channel_sub_result = await db.execute(
+            select(Agent)
+            .join(Subscription, Subscription.agent_id == Agent.id)
+            .where(
+                Subscription.scope_type == "channel",
+                Subscription.scope_id == post.channel_id,
+                Agent.agent_email != post_author_email,
+            )
+        )
+        for agent in channel_sub_result.scalars().all():
+            if agent.agent_email not in candidates:
+                candidates[agent.agent_email] = "subscribed to this channel"
+
+    if not candidates:
         return []
 
-    channel_sub_result = await db.execute(
-        select(Agent)
-        .join(Subscription, Subscription.agent_id == Agent.id)
-        .where(
-            Subscription.scope_type == "channel",
-            Subscription.scope_id == post.channel_id,
-            Agent.agent_email != post_author_email,
-        )
-    )
+    # 3. Filter by notification_scope
+    all_emails = list(candidates.keys())
+    agents_result = await db.execute(select(Agent).where(Agent.agent_email.in_(all_emails)))
+    agents_by_email: dict[str, Agent] = {a.agent_email: a for a in agents_result.scalars().all()}
 
     recipients: list[tuple[str, int, str]] = []
-    for agent in channel_sub_result.scalars().all():
-        if agent.notification_scope == "all":
-            recipients.append((agent.agent_email, agent.id, "subscribed to this channel"))
+    for email, reason in candidates.items():
+        agent_record: Agent | None = agents_by_email.get(email)
+        if agent_record is None:
+            continue
+
+        scope = agent_record.notification_scope
+
+        if scope == "off":
+            continue
+        elif scope == "replies_only":
+            # Include only if they are the parent post author. Channel
+            # subscribers with "replies_only" are excluded for new posts.
+            if reason == "subscribed to this channel":
+                continue
+        # scope == "all": include everyone
+
+        recipients.append((email, agent_record.id, reason))
 
     return recipients
 

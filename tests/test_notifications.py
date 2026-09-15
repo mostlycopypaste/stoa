@@ -458,6 +458,227 @@ class TestGetNewPostRecipients:
         recipients = await get_new_post_recipients(db, post, "alice@herd.ai")
         assert recipients == []
 
+    async def test_reply_post_notifies_parent_author(
+        self,
+        client: AsyncClient,
+        db: AsyncSession,
+    ) -> None:
+        """Issue #119: a reply-post must notify the parent post's author.
+
+        Mirrors get_comment_recipients rule 1 (post author is always
+        notified) — the same rule was missing for reply-posts.
+        """
+        from stoa.models import Post
+
+        root = Post(
+            author="alice@herd.ai",
+            subject="Root post",
+            tldr="TLDR",
+            body_markdown="Body",
+            body_html="<p>Body</p>",
+            token_cost=10,
+        )
+        db.add(root)
+        await db.flush()
+
+        reply = Post(
+            author="bob@herd.ai",
+            subject="Re: Root post",
+            tldr="TLDR",
+            body_markdown="Body",
+            body_html="<p>Body</p>",
+            token_cost=10,
+            parent_post_id=root.id,
+        )
+        db.add(reply)
+        await db.flush()
+
+        recipients = await get_new_post_recipients(db, reply, "bob@herd.ai")
+        emails = [r[0] for r in recipients]
+        reasons = {r[0]: r[2] for r in recipients}
+
+        assert "alice@herd.ai" in emails
+        assert reasons["alice@herd.ai"] == "authored the post this replies to"
+
+    async def test_reply_post_excludes_self_reply(
+        self,
+        client: AsyncClient,
+        db: AsyncSession,
+    ) -> None:
+        """A reply-post author replying to their own post is never self-notified."""
+        from stoa.models import Post
+
+        root = Post(
+            author="alice@herd.ai",
+            subject="Root post",
+            tldr="TLDR",
+            body_markdown="Body",
+            body_html="<p>Body</p>",
+            token_cost=10,
+        )
+        db.add(root)
+        await db.flush()
+
+        reply = Post(
+            author="alice@herd.ai",
+            subject="Re: Root post",
+            tldr="TLDR",
+            body_markdown="Body",
+            body_html="<p>Body</p>",
+            token_cost=10,
+            parent_post_id=root.id,
+        )
+        db.add(reply)
+        await db.flush()
+
+        recipients = await get_new_post_recipients(db, reply, "alice@herd.ai")
+        emails = [r[0] for r in recipients]
+        assert "alice@herd.ai" not in emails
+
+    async def test_reply_post_parent_author_replies_only_scope_included(
+        self,
+        client: AsyncClient,
+        db: AsyncSession,
+    ) -> None:
+        """notification_scope='replies_only' must still include the parent author.
+
+        A reply to your own post is the canonical "reply to me" case.
+        """
+        from stoa.models import Post
+
+        alice = (
+            await db.execute(select(Agent).where(Agent.agent_email == "alice@herd.ai"))
+        ).scalar_one()
+        alice.notification_scope = "replies_only"
+        await db.flush()
+
+        root = Post(
+            author="alice@herd.ai",
+            subject="Root post",
+            tldr="TLDR",
+            body_markdown="Body",
+            body_html="<p>Body</p>",
+            token_cost=10,
+        )
+        db.add(root)
+        await db.flush()
+
+        reply = Post(
+            author="bob@herd.ai",
+            subject="Re: Root post",
+            tldr="TLDR",
+            body_markdown="Body",
+            body_html="<p>Body</p>",
+            token_cost=10,
+            parent_post_id=root.id,
+        )
+        db.add(reply)
+        await db.flush()
+
+        recipients = await get_new_post_recipients(db, reply, "bob@herd.ai")
+        emails = [r[0] for r in recipients]
+        assert "alice@herd.ai" in emails
+
+    async def test_reply_post_parent_author_off_scope_excluded(
+        self,
+        client: AsyncClient,
+        db: AsyncSession,
+    ) -> None:
+        """notification_scope='off' still excludes the parent author."""
+        from stoa.models import Post
+
+        alice = (
+            await db.execute(select(Agent).where(Agent.agent_email == "alice@herd.ai"))
+        ).scalar_one()
+        alice.notification_scope = "off"
+        await db.flush()
+
+        root = Post(
+            author="alice@herd.ai",
+            subject="Root post",
+            tldr="TLDR",
+            body_markdown="Body",
+            body_html="<p>Body</p>",
+            token_cost=10,
+        )
+        db.add(root)
+        await db.flush()
+
+        reply = Post(
+            author="bob@herd.ai",
+            subject="Re: Root post",
+            tldr="TLDR",
+            body_markdown="Body",
+            body_html="<p>Body</p>",
+            token_cost=10,
+            parent_post_id=root.id,
+        )
+        db.add(reply)
+        await db.flush()
+
+        recipients = await get_new_post_recipients(db, reply, "bob@herd.ai")
+        emails = [r[0] for r in recipients]
+        assert "alice@herd.ai" not in emails
+
+    async def test_reply_post_parent_author_deduped_with_channel_subscription(
+        self,
+        client: AsyncClient,
+        db: AsyncSession,
+    ) -> None:
+        """The parent author must appear exactly once even if also a channel subscriber."""
+        from stoa.models import Channel, Group, Membership, Post
+
+        group = Group(name="Dedupe Group", description="test", visibility="public")
+        db.add(group)
+        await db.flush()
+
+        channel = Channel(name="dedupe-channel", description="test", topic="", group_id=group.id)
+        db.add(channel)
+        await db.flush()
+
+        alice = (
+            await db.execute(select(Agent).where(Agent.agent_email == "alice@herd.ai"))
+        ).scalar_one()
+        bob = (
+            await db.execute(select(Agent).where(Agent.agent_email == "bob@herd.ai"))
+        ).scalar_one()
+
+        db.add(Membership(agent_id=alice.id, group_id=group.id, role="owner"))
+        db.add(Membership(agent_id=bob.id, group_id=group.id, role="member"))
+
+        alice.notification_scope = "all"
+        db.add(Subscription(agent_id=alice.id, scope_type="channel", scope_id=channel.id))
+        await db.flush()
+
+        root = Post(
+            author="alice@herd.ai",
+            subject="Root post",
+            tldr="TLDR",
+            body_markdown="Body",
+            body_html="<p>Body</p>",
+            token_cost=10,
+            channel_id=channel.id,
+        )
+        db.add(root)
+        await db.flush()
+
+        reply = Post(
+            author="bob@herd.ai",
+            subject="Re: Root post",
+            tldr="TLDR",
+            body_markdown="Body",
+            body_html="<p>Body</p>",
+            token_cost=10,
+            channel_id=channel.id,
+            parent_post_id=root.id,
+        )
+        db.add(reply)
+        await db.flush()
+
+        recipients = await get_new_post_recipients(db, reply, "bob@herd.ai")
+        alice_recipients = [r for r in recipients if r[0] == "alice@herd.ai"]
+        assert len(alice_recipients) == 1
+
 
 # --- Notification failure does not block request ---
 
