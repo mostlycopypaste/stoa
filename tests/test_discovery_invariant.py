@@ -115,4 +115,4 @@ async def test_blindness_runs_in_both_directions(client: AsyncClient, db: AsyncS
 
     assert await surface_thread(client, scenario) == {COMMENT}
     assert await surface_notifications(db, scenario) == MECHANISMS
-    assert await surface_dashboard(client, scenario) == {REPLY_POST}
+    assert await surface_dashboard(client, scenario) == MECHANISMS
