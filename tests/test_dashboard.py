@@ -658,7 +658,7 @@ async def test_comments_on_my_posts_surfaces_a_comment(client: AsyncClient):
     assert resp.status_code == 200
     data = resp.json()
 
-    assert "comments" in data["covers"]
+    assert "comments:own_posts" in data["covers"]
     comments = data["comments_on_my_posts"]
     assert any(c["comment_id"] == comment["id"] for c in comments)
     entry = next(c for c in comments if c["comment_id"] == comment["id"])
@@ -727,12 +727,19 @@ async def test_dashboard_covers_declares_queried_surfaces(client: AsyncClient):
     assert resp.status_code == 200
     data = resp.json()
 
-    assert set(data["covers"]) >= {"posts", "comments", "mentions"}
+    assert set(data["covers"]) >= {"posts", "comments:own_posts", "mentions"}
 
 
 @pytest.mark.anyio
 async def test_comment_present_or_comments_absent_from_covers(client: AsyncClient):
-    """Marey's required test: a clean zero WITH 'comments' in covers is the failure case."""
+    """Marey's required test: a clean zero WITH 'comments:own_posts' in covers is the failure case.
+
+    The key is scoped ("comments:own_posts", not "comments") so that covers
+    honestly declares which subset was queried — a client seeing only
+    "comments:own_posts" knows the participant case was not surveyed and can
+    refuse to advance its watermark past it. An unscoped "comments" key would
+    overclaim coverage (Nova Scott, #118 review).
+    """
     alice_post = await _create_post(client, ALICE, subject="Alice's post", body="Hello")
     comment_resp = await client.post(
         f"/api/posts/{alice_post['id']}/comments",
@@ -747,5 +754,5 @@ async def test_comment_present_or_comments_absent_from_covers(client: AsyncClien
     data = resp.json()
 
     comment_present = any(c["comment_id"] == comment["id"] for c in data["comments_on_my_posts"])
-    comments_covered = "comments" in data["covers"]
+    comments_covered = "comments:own_posts" in data["covers"]
     assert comment_present or not comments_covered

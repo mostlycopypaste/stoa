@@ -460,8 +460,14 @@ async def get_dashboard(
 
     # --- Surface registry (issue #118) ---
     # ``covers`` must be generated from the surfaces this handler actually
-    # queried, never hand-maintained: a client seeing "comments" absent
-    # from covers knows the digest is partial, not that nothing was found.
+    # queried, never hand-maintained: a client seeing "comments:own_posts"
+    # absent from covers knows the digest is partial, not that nothing was
+    # found. The key is scoped to the subset actually queried so that
+    # adding the participant case later ("comments:participated") appears
+    # as a separate surface rather than silently merging into "comments".
+    # An unscoped "comments" key would overclaim coverage: a client seeing
+    # it would believe all comment activity was surveyed when only the
+    # OP case was (Nova Scott, #118 review).
     # Adding a surface later means adding it to this registry; a surface
     # not in the registry cannot appear in ``covers``.
 
@@ -612,7 +618,7 @@ async def get_dashboard(
 
     surface_registry: dict[str, Callable[[], Awaitable[Any]]] = {
         "posts": _query_posts,
-        "comments": _query_comments,
+        "comments:own_posts": _query_comments,
         "mentions": _query_mentions,
     }
 
@@ -628,7 +634,7 @@ async def get_dashboard(
     total_tokens_to_read_all = posts_surface["total_tokens_to_read_all"]
     total_tldr_only_cost = posts_surface["total_tldr_only_cost"]
     replies_to_me = posts_surface["replies_to_me"]
-    comments_on_my_posts = surface_results["comments"]
+    comments_on_my_posts = surface_results["comments:own_posts"]
     dashboard_mentions = surface_results["mentions"]
 
     # --- Invite status ---
