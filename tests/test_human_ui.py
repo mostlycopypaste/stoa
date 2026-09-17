@@ -21,6 +21,7 @@ from stoa.models import (
 )
 from stoa.routes import human_ui as human_ui_routes
 from stoa.services.posts import count_tokens
+from tests.helpers import assert_balanced_html
 
 
 async def _create_verified_human(
@@ -59,6 +60,7 @@ async def test_register_page_accepts_invite_query_parameter(client: AsyncClient)
     response = await client.get("/ui/register?invite=invite_7G60Z6R")
 
     assert response.status_code == 200
+    assert_balanced_html(response.text)
     assert 'action="/ui/register"' in response.text
     assert 'name="invite_code"' in response.text
     assert 'value="invite_7G60Z6R"' in response.text
@@ -73,6 +75,7 @@ async def test_register_page_escapes_invite_query_parameter(client: AsyncClient)
     response = await client.get("/ui/register", params={"invite": '"><script>alert(1)</script>'})
 
     assert response.status_code == 200
+    assert_balanced_html(response.text)
     assert "<script>" not in response.text
     assert "&lt;script&gt;" in response.text
 
@@ -93,6 +96,7 @@ async def test_register_human_consumes_invite(client: AsyncClient, db: AsyncSess
     )
 
     assert response.status_code == 200
+    assert_balanced_html(response.text)
     assert "Check your inbox" in response.text
     human_result = await db.execute(
         select(HumanUser).where(HumanUser.email == "new-human@example.com")
@@ -120,6 +124,7 @@ async def test_register_human_rejects_invalid_invite(client: AsyncClient, db: As
     )
 
     assert response.status_code == 200
+    assert_balanced_html(response.text)
     assert "Invalid or already-used invite code" in response.text
     result = await db.execute(select(HumanUser).where(HumanUser.email == "not-created@example.com"))
     assert result.scalar_one_or_none() is None
@@ -143,6 +148,7 @@ async def test_register_human_validation_does_not_consume_invite(
     )
 
     assert response.status_code == 200
+    assert_balanced_html(response.text)
     assert "Passwords do not match" in response.text
     invite_result = await db.execute(select(Invite).where(Invite.code == invite_code))
     assert invite_result.scalar_one().used is False
@@ -176,6 +182,7 @@ async def test_register_human_email_failure_offers_resend(
     )
 
     assert response.status_code == 200
+    assert_balanced_html(response.text)
     assert "could not send the verification email" in response.text
     assert 'action="/ui/resend-verification"' in response.text
     human_result = await db.execute(select(HumanUser).where(HumanUser.email == "retry@example.com"))
@@ -188,6 +195,7 @@ async def test_register_human_email_failure_offers_resend(
     )
 
     assert resend.status_code == 200
+    assert_balanced_html(resend.text)
     assert "Check your inbox" in resend.text
     assert delivery_attempts == 2
 
@@ -213,6 +221,7 @@ async def test_register_verify_and_login_flow(client: AsyncClient, db: AsyncSess
     assert verify_response.status_code == 303
     assert verify_response.headers["location"] == "/ui/login?verified=1"
     login_page = await client.get(verify_response.headers["location"])
+    assert_balanced_html(login_page.text)
     assert "Email verified" in login_page.text
     login_response = await client.post(
         "/ui/login",
@@ -228,6 +237,7 @@ async def test_login_page_renders(client: AsyncClient):
     """GET /ui/login returns 200 with login form."""
     response = await client.get("/ui/login")
     assert response.status_code == 200
+    assert_balanced_html(response.text)
     assert "Enter" in response.text
     assert 'name="email"' in response.text
     assert 'name="password"' in response.text
@@ -275,6 +285,7 @@ async def test_login_invalid_password(client: AsyncClient, db: AsyncSession):
         data={"email": "human@example.com", "password": "wrongpassword"},
     )
     assert response.status_code == 200
+    assert_balanced_html(response.text)
     assert "Invalid email or password" in response.text
 
 
@@ -286,6 +297,7 @@ async def test_login_nonexistent_email(client: AsyncClient):
         data={"email": "nobody@example.com", "password": "anything"},
     )
     assert response.status_code == 200
+    assert_balanced_html(response.text)
     assert "Invalid email or password" in response.text
 
 
@@ -300,6 +312,7 @@ async def test_login_unverified_account(client: AsyncClient, db: AsyncSession):
         data={"email": "unverified@example.com", "password": "testpass123"},
     )
     assert response.status_code == 200
+    assert_balanced_html(response.text)
     assert "Account not verified" in response.text
 
 
@@ -329,6 +342,7 @@ async def test_groups_shows_public_groups(client: AsyncClient, db: AsyncSession)
 
     response = await client.get("/ui/groups")
     assert response.status_code == 200
+    assert_balanced_html(response.text)
     assert "Test Public" in response.text
 
 
@@ -349,6 +363,7 @@ async def test_groups_hides_private_groups_without_membership(
 
     response = await client.get("/ui/groups")
     assert response.status_code == 200
+    assert_balanced_html(response.text)
     assert "Secret Group" not in response.text
 
 
@@ -370,6 +385,7 @@ async def test_group_detail_shows_channels(client: AsyncClient, db: AsyncSession
 
     response = await client.get(f"/ui/groups/{group.id}")
     assert response.status_code == 200
+    assert_balanced_html(response.text)
     assert "Dev Group" in response.text
     assert "general" in response.text
 
@@ -402,6 +418,7 @@ async def test_channel_shows_messages(client: AsyncClient, db: AsyncSession):
 
     response = await client.get(f"/ui/channels/{channel.id}")
     assert response.status_code == 200
+    assert_balanced_html(response.text)
     assert "Hello World" in response.text
     assert "A greeting" in response.text
 
@@ -495,6 +512,7 @@ async def test_private_group_visible_via_agent_membership(client: AsyncClient, d
 
     response = await client.get("/ui/groups")
     assert response.status_code == 200
+    assert_balanced_html(response.text)
     assert "Private Club" in response.text
 
 
@@ -595,6 +613,7 @@ async def test_agents_directory_lists_public_hides_private(client: AsyncClient, 
     await _login(client)
     response = await client.get("/ui/agents")
     assert response.status_code == 200
+    assert_balanced_html(response.text)
     assert "Publius" in response.text
     assert "Ghost" not in response.text
 
@@ -632,6 +651,7 @@ async def test_agent_profile_renders(client: AsyncClient, db: AsyncSession):
     await _login(client)
     response = await client.get(f"/ui/agents/{agent.id}")
     assert response.status_code == 200
+    assert_balanced_html(response.text)
     assert "Cato" in response.text
     assert "Stoic reasoner" in response.text
     assert "logic" in response.text
@@ -681,6 +701,7 @@ async def test_agent_profile_hides_private_group_membership(client: AsyncClient,
     await _login(client)
     response = await client.get(f"/ui/agents/{agent.id}")
     assert response.status_code == 200
+    assert_balanced_html(response.text)
     assert "Open Forum" in response.text
     assert "Secret Cabal" not in response.text
 
@@ -728,10 +749,12 @@ async def test_agent_activity_hides_private_posts_and_counts_from_non_member(
 
     directory_response = await client.get("/ui/agents")
     assert directory_response.status_code == 200
+    assert_balanced_html(directory_response.text)
     assert "1 post" in directory_response.text
 
     profile_response = await client.get(f"/ui/agents/{author.id}")
     assert profile_response.status_code == 200
+    assert_balanced_html(profile_response.text)
     assert "Public activity" in profile_response.text
     assert "Private activity" not in profile_response.text
     assert "Must stay private" not in profile_response.text
@@ -771,10 +794,12 @@ async def test_agent_activity_includes_private_posts_for_group_member(
 
     directory_response = await client.get("/ui/agents")
     assert directory_response.status_code == 200
+    assert_balanced_html(directory_response.text)
     assert "1 post" in directory_response.text
 
     profile_response = await client.get(f"/ui/agents/{author.id}")
     assert profile_response.status_code == 200
+    assert_balanced_html(profile_response.text)
     assert "Visible private activity" in profile_response.text
     assert "Visible to fellow members" in profile_response.text
     assert "(1 total)" in profile_response.text
@@ -798,6 +823,7 @@ async def test_group_detail_lists_members_linking_to_profiles(
     await _login(client)
     response = await client.get(f"/ui/groups/{group.id}")
     assert response.status_code == 200
+    assert_balanced_html(response.text)
     assert "Orator" in response.text
     assert f"/ui/agents/{agent.id}" in response.text
 
@@ -829,6 +855,7 @@ async def test_channel_timestamps_display_utc_label(client: AsyncClient, db: Asy
     await _login(client)
     response = await client.get(f"/ui/channels/{channel.id}")
     assert response.status_code == 200
+    assert_balanced_html(response.text)
     assert "UTC" in response.text
 
 
@@ -857,6 +884,7 @@ async def test_post_detail_timestamp_displays_utc_label(client: AsyncClient, db:
     await _login(client)
     response = await client.get(f"/ui/posts/{post.id}")
     assert response.status_code == 200
+    assert_balanced_html(response.text)
     assert "Feb 03, 2026 at 14:22 UTC" in response.text
 
 
@@ -895,6 +923,7 @@ async def test_agent_profile_timestamps_display_utc_label(client: AsyncClient, d
     await _login(client)
     response = await client.get(f"/ui/agents/{agent.id}")
     assert response.status_code == 200
+    assert_balanced_html(response.text)
     assert "UTC" in response.text
 
 
@@ -958,6 +987,7 @@ async def test_post_detail_reply_displays_its_own_timestamp(client: AsyncClient,
     response = await client.get(f"/ui/posts/{post.id}")
 
     assert response.status_code == 200
+    assert_balanced_html(response.text)
     # The reply's timestamp is deliberately distinct from the post's, so this
     # cannot pass on the post header alone.
     assert "Feb 04, 2026 at 09:05 UTC" in response.text
@@ -981,6 +1011,7 @@ async def test_post_detail_reply_displays_token_cost(client: AsyncClient, db: As
     response = await client.get(f"/ui/posts/{post.id}")
 
     assert response.status_code == 200
+    assert_balanced_html(response.text)
     assert "6 tokens" in response.text
 
 
@@ -1004,4 +1035,5 @@ async def test_post_detail_reply_token_cost_matches_api_count(
     response = await client.get(f"/ui/posts/{post.id}")
 
     assert response.status_code == 200
+    assert_balanced_html(response.text)
     assert f"{count_tokens(reply_body)} tokens" in response.text

@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from stoa.main import global_exception_handler
+from tests.helpers import assert_balanced_html
 
 
 async def test_health_check(client: AsyncClient) -> None:
@@ -19,6 +20,7 @@ async def test_root(client: AsyncClient) -> None:
     response = await client.get("/")
     assert response.status_code == 200
     assert "Stoa" in response.text
+    assert_balanced_html(response.text)
 
 
 @pytest.fixture
