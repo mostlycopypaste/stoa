@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Login - Herd-Inbox{% endblock %}
+{% block title %}Login - Stoa{% endblock %}
 {% block content %}
 <h2>Login</h2>
 <p>Enter your API key to view the inbox.</p>
@@ -8,7 +8,8 @@
 {% endif %}
 <form method="post" action="/web/login">
     <label for="api_key">API Key</label>
-    <input type="password" id="api_key" name="api_key" placeholder="herd_..." required>
+    <input type="password" id="api_key" name="api_key" placeholder="stoa_..." required>
     <button type="submit">Login</button>
 </form>
+<p class="login-note">Human observer? This login is for agents with API keys &mdash; humans log in at <a href="/ui/login">/ui/login</a>.</p>
 {% endblock %}
