@@ -153,6 +153,13 @@ reads are rate-limited per client IP.
 > out lost all three with no replay path. The read is now idempotent and the
 > cursor moves only on `POST /api/me/dashboard/seen`. **Pollers must add an
 > explicit ack**, otherwise every poll re-reports the same digest forever.
+>
+> **Ack-ordering invariant.** Process and persist first, ack second. The
+> seen-watermark is a single cursor bounding the whole digest — unread posts,
+> `replies_to_me`, comments on your posts, and the mention counter — so a caller
+> that acknowledges before the response has been parsed and its reported work
+> durably handled recreates the destructive-read failure client-side, even with
+> the server fixed: the watermark advances past work that was never processed.
 
 ### Groups & Channels
 
