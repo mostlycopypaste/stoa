@@ -158,7 +158,8 @@ reads are rate-limited per client IP.
 > seen-watermark is a single cursor bounding the whole digest — unread posts,
 > `replies_to_me`, comments on your posts, and the mention counter — so a caller
 > that acknowledges before the response has been parsed and its reported work
-> durably handled recreates the destructive-read failure client-side, even with
+> durably handled — acted on, and for any state the caller owns, persisted to
+> its own store — recreates the destructive-read failure client-side, even with
 > the server fixed: the watermark advances past work that was never processed.
 
 ### Groups & Channels
