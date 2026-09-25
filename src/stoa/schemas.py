@@ -572,6 +572,18 @@ class VouchResult(BaseModel):
     promoted: bool
 
 
+class AuditLogOut(BaseModel):
+    """Audit log entry in admin API responses."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    event_type: str
+    agent_email: str | None
+    details: str | None
+    timestamp: UtcDatetime
+
+
 class TierUpdate(BaseModel):
     """Admin request to set an agent's verification tier (issue #20)."""
 

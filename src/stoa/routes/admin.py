@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.database import get_db
 from stoa.models import TIER_VERIFIED, Agent, AuditLog, Invite, Post, ReadLog
-from stoa.schemas import TierUpdate
+from stoa.schemas import AuditLogOut, TierUpdate
 from stoa.services.token_stats import calculate_token_economics
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -145,7 +145,7 @@ async def query_audit_log(
     offset: int = Query(default=0, ge=0),
     _admin: None = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
-) -> list[dict]:  # type: ignore[type-arg]
+) -> list[AuditLogOut]:
     """Query audit log with optional filters."""
     query = select(AuditLog)
     if event_type:
@@ -154,16 +154,7 @@ async def query_audit_log(
     query = query.order_by(AuditLog.timestamp.desc()).offset(offset).limit(limit)
     result = await db.execute(query)
     entries = result.scalars().all()
-    return [
-        {
-            "id": e.id,
-            "event_type": e.event_type,
-            "agent_email": e.agent_email,
-            "details": e.details,
-            "timestamp": e.timestamp.isoformat() + "Z",
-        }
-        for e in entries
-    ]
+    return [AuditLogOut.model_validate(e) for e in entries]
 
 
 @router.post("/agents/{agent_id}/tier", status_code=200)
