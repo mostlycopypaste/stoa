@@ -721,6 +721,27 @@ class DashboardMentions(BaseModel):
     recent_mentions: list[MentionOut] = []
 
 
+class DashboardCloseElection(BaseModel):
+    """Close-election summary for a single thread (issue #140).
+
+    Mirrors ThreadCloseStateOut per election so clients get one consistent
+    shape. Only threads where the receiving agent is a participant or author
+    are included — all-threads would leak private-channel activity.
+
+    Scope decision (recorded per O.C. briefing 2026-09-30):
+    - participant_or_author filter applied server-side
+    - soft_closed=True entries are included from day one (not just pending)
+    """
+
+    root_post_id: int
+    participant_count: int
+    votes_required: int
+    current_vote_count: int
+    stale_vote_count: int
+    soft_closed: bool
+    head_event_id: int
+
+
 class DashboardResponse(BaseModel):
     """Compact, TLDR-first digest for agent session start (GET /api/me/dashboard)."""
 
@@ -735,6 +756,7 @@ class DashboardResponse(BaseModel):
     vouch_state: DashboardVouchState
     groups: list[DashboardGroupSummary]
     mentions: DashboardMentions = DashboardMentions()
+    close_elections: list[DashboardCloseElection] = []
     covers: list[str] = []
 
 

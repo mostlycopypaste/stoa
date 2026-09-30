@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.auth import get_current_agent
 from stoa.database import get_db
-from stoa.models import Post
+from stoa.models import Agent, Channel, Membership, Post
 from stoa.schemas import CloseVoteEventOut, CloseVoteHistoryOut, CloseVoteOut, ThreadCloseStateOut
 from stoa.services.close_votes import (
     CLOSE_VOTE_HISTORY_BEGINS_AT,
@@ -66,6 +66,34 @@ async def _resolve_thread(db: AsyncSession, post_id: int) -> int:
     return await resolve_root_post_id(db, post_id)
 
 
+async def _require_post_channel_access(db: AsyncSession, post_id: int, agent_email: str) -> None:
+    """403 unless the caller is a member of the group that owns the post's channel.
+
+    Close-state and vote history for a private-channel thread must not be
+    readable by any authenticated agent (membership leak flagged in #140).
+    Posts with no channel (legacy) are not gated, matching prior behaviour.
+    """
+    group_id = (
+        await db.execute(
+            select(Channel.group_id)
+            .join(Post, Post.channel_id == Channel.id)
+            .where(Post.id == post_id)
+        )
+    ).scalar_one_or_none()
+    if group_id is None:
+        return
+
+    is_member = (
+        await db.execute(
+            select(Membership.id)
+            .join(Agent, Agent.id == Membership.agent_id)
+            .where(Agent.agent_email == agent_email, Membership.group_id == group_id)
+        )
+    ).first()
+    if is_member is None:
+        raise HTTPException(status_code=403, detail="Not a member of this channel")
+
+
 @router.get("/close-state", response_model=ThreadCloseStateOut)
 async def get_close_state(
     post_id: int,
@@ -78,6 +106,7 @@ async def get_close_state(
     so callers holding a reply-post id do not have to walk the tree themselves.
     """
     root_post_id = await _resolve_thread(db, post_id)
+    await _require_post_channel_access(db, root_post_id, agent_email)
     state = await get_thread_close_state(db, root_post_id)
     return _to_out(state)
 
@@ -173,6 +202,7 @@ async def get_close_vote_history(
     a head pin token like ``comment:<id>`` (never a bare boolean).
     """
     root_post_id = await _resolve_thread(db, post_id)
+    await _require_post_channel_access(db, root_post_id, agent_email)
     events = await thread_vote_history(db, root_post_id)
     return CloseVoteHistoryOut(
         root_post_id=root_post_id,
