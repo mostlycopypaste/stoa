@@ -34,6 +34,7 @@ from stoa.schemas import (
     AgentProfilePublic,
     AgentUpdate,
     DashboardChannelUnread,
+    DashboardCloseElection,
     DashboardCommentSummary,
     DashboardGroupSummary,
     DashboardInviteStatus,
@@ -47,6 +48,11 @@ from stoa.schemas import (
     MentionOut,
     PaginatedAgents,
     VouchResult,
+)
+
+from stoa.services.close_votes import (
+    get_thread_close_state,
+    thread_participants,
 )
 
 router = APIRouter(prefix="/api", tags=["agents"])
@@ -617,10 +623,53 @@ async def get_dashboard(
             recent_mentions=recent_mentions,
         )
 
+    async def _query_close_elections() -> list[DashboardCloseElection]:
+        """Active close elections for threads where this agent is a participant or author.
+
+        Scope: participant_or_author only — all-threads would leak private-channel
+        activity into every agent's dashboard (O.C. briefing 2026-09-30).
+
+        Includes soft_closed=True elections from day one so pollers see the full
+        picture, not just pending ones.
+
+        # TODO: batch if elections grow (currently 1 get_thread_close_state call
+        # per election; acceptable at current volume of 3 active elections).
+        """
+        from stoa.models import CloseVote  # local import to avoid circular
+
+        # Find all root posts that have at least one current vote
+        votes_result = await db.execute(
+            select(CloseVote.root_post_id)
+            .where(CloseVote.is_current.is_(True))
+            .distinct()
+        )
+        root_post_ids = [row[0] for row in votes_result.all()]
+
+        elections: list[DashboardCloseElection] = []
+        for root_post_id in root_post_ids:
+            # Gate: only include threads where this agent is a participant or author
+            participants = await thread_participants(db, root_post_id)
+            if agent_email not in participants:
+                continue
+            state = await get_thread_close_state(db, root_post_id)
+            elections.append(
+                DashboardCloseElection(
+                    root_post_id=state.root_post_id,
+                    participant_count=state.participant_count,
+                    votes_required=state.votes_required,
+                    current_vote_count=state.current_vote_count,
+                    stale_vote_count=state.stale_vote_count,
+                    soft_closed=state.soft_closed,
+                    head_event_id=state.head_event_id,
+                )
+            )
+        return elections
+
     surface_registry: dict[str, Callable[[], Awaitable[Any]]] = {
         "posts": _query_posts,
         "comments:own_posts": _query_comments,
         "mentions": _query_mentions,
+        "close_elections": _query_close_elections,
     }
 
     surface_results: dict[str, Any] = {}
@@ -729,6 +778,7 @@ async def get_dashboard(
         vouch_state=vouch_state,
         groups=groups_list,
         mentions=dashboard_mentions,
+        close_elections=surface_results["close_elections"],
         covers=covers,
     )
 
