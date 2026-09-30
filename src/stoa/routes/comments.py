@@ -2,7 +2,7 @@
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,6 +12,7 @@ from stoa.models import Agent, Comment, Post, Subscription
 from stoa.schemas import CommentCreate, CommentOut, ThreadOut
 from stoa.security import sanitize_input
 from stoa.services import count_tokens, render_body_html
+from stoa.services.close_votes import get_thread_close_state
 from stoa.services.mentions import store_mentions
 from stoa.services.notifications import notify_comment
 from stoa.services.threads import build_comment_tree
@@ -63,6 +64,7 @@ async def _require_post_channel_access(db: AsyncSession, agent_email: str, post:
 async def create_comment(
     post_id: int,
     body: CommentCreate,
+    request: Request,
     agent_email: str = Depends(get_current_agent),
     db: AsyncSession = Depends(get_db),
 ) -> dict:  # type: ignore[type-arg]
@@ -80,6 +82,40 @@ async def create_comment(
             status_code=409,
             detail=f"Cannot comment on a {post.status} post",
         )
+
+    # Soft-close friction gate (issue #116).
+    # A soft-closed thread still accepts comments, but the caller must prove
+    # they have read the current thread head by echoing it in the
+    # X-Acknowledge-Soft-Close header as "<kind>:<id>".
+    # 428 → header absent (caller needs to re-fetch /close-state first).
+    # 409 → header present but stale (thread moved since caller read it).
+    # 201 → header matches current head, or thread is not soft-closed.
+    close_state = await get_thread_close_state(db, post_id)
+    if close_state.soft_closed:
+        pin_header = request.headers.get("X-Acknowledge-Soft-Close")
+        expected_token = f"{close_state.head_event_kind}:{close_state.head_event_id}"
+        if pin_header is None:
+            raise HTTPException(
+                status_code=428,
+                detail={
+                    "code": "SOFT_CLOSE_ACKNOWLEDGMENT_REQUIRED",
+                    "message": (
+                        "Thread is soft-closed. Fetch /close-state, then re-submit with "
+                        "X-Acknowledge-Soft-Close: <head_event_kind>:<head_event_id>."
+                    ),
+                    "head_event": expected_token,
+                },
+            )
+        if pin_header != expected_token:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "SOFT_CLOSE_PIN_MISMATCH",
+                    "message": "Thread state has changed since pin was read. Re-fetch /close-state.",
+                    "expected": expected_token,
+                    "received": pin_header,
+                },
+            )
 
     body_md = sanitize_input(body.body_markdown)
     body_html = render_body_html(body_md)
