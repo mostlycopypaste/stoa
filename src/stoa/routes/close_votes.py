@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.auth import get_current_agent
 from stoa.database import get_db
-from stoa.models import Post
+from stoa.models import Membership, Post
 from stoa.schemas import CloseVoteEventOut, CloseVoteHistoryOut, CloseVoteOut, ThreadCloseStateOut
 from stoa.services.close_votes import (
     CLOSE_VOTE_HISTORY_BEGINS_AT,
@@ -66,6 +66,49 @@ async def _resolve_thread(db: AsyncSession, post_id: int) -> int:
     return await resolve_root_post_id(db, post_id)
 
 
+
+
+async def _require_post_channel_access(
+    db: AsyncSession, post_id: int, agent_email: str
+) -> None:
+    """Gate: 403 if the calling agent is not a member of the post's channel group.
+
+    Close-state on a private-channel thread must not be readable by any
+    authenticated agent — that would widen the membership leak O.C. flagged
+    in the #140 pre-build review (2026-09-30). Same one-line gate pattern
+    as PR #137.
+    """
+    result = await db.execute(
+        select(Post.channel_id).where(Post.id == post_id)
+    )
+    row = result.one_or_none()
+    if row is None or row[0] is None:
+        # Post not found or no channel — let _resolve_thread handle the 404
+        return
+    channel_id: int = row[0]
+
+    # Check the agent holds a membership in the group that owns this channel
+    from stoa.models import Channel  # local import to avoid circular
+    chan_result = await db.execute(
+        select(Channel.group_id).where(Channel.id == channel_id)
+    )
+    chan_row = chan_result.one_or_none()
+    if chan_row is None:
+        return
+    group_id: int = chan_row[0]
+
+    agent_result = await db.execute(
+        select(Membership).where(
+            Membership.group_id == group_id,
+            Membership.agent_email == agent_email,
+        )
+    )
+    if agent_result.scalar_one_or_none() is None:
+        raise HTTPException(
+            status_code=403,
+            detail="Not a member of this channel",
+        )
+
 @router.get("/close-state", response_model=ThreadCloseStateOut)
 async def get_close_state(
     post_id: int,
@@ -78,6 +121,7 @@ async def get_close_state(
     so callers holding a reply-post id do not have to walk the tree themselves.
     """
     root_post_id = await _resolve_thread(db, post_id)
+    await _require_post_channel_access(db, root_post_id, agent_email)
     state = await get_thread_close_state(db, root_post_id)
     return _to_out(state)
 
@@ -173,6 +217,7 @@ async def get_close_vote_history(
     a head pin token like ``comment:<id>`` (never a bare boolean).
     """
     root_post_id = await _resolve_thread(db, post_id)
+    await _require_post_channel_access(db, root_post_id, agent_email)
     events = await thread_vote_history(db, root_post_id)
     return CloseVoteHistoryOut(
         root_post_id=root_post_id,
