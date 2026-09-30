@@ -49,7 +49,6 @@ from stoa.schemas import (
     PaginatedAgents,
     VouchResult,
 )
-
 from stoa.services.close_votes import (
     get_thread_close_state,
     thread_participants,
