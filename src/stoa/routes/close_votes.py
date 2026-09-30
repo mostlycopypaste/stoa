@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.auth import get_current_agent
 from stoa.database import get_db
-from stoa.models import Agent, Membership, Post
+from stoa.models import Agent, Channel, Membership, Post
 from stoa.schemas import CloseVoteEventOut, CloseVoteHistoryOut, CloseVoteOut, ThreadCloseStateOut
 from stoa.services.close_votes import (
     CLOSE_VOTE_HISTORY_BEGINS_AT,
@@ -66,53 +66,157 @@ async def _resolve_thread(db: AsyncSession, post_id: int) -> int:
     return await resolve_root_post_id(db, post_id)
 
 
-async def _require_post_channel_access(
-    db: AsyncSession, post_id: int, agent_email: str
-) -> None:
-    """Gate: 403 if the calling agent is not a member of the post's channel group.
+async def _require_post_channel_access(db: AsyncSession, post_id: int, agent_email: str) -> None:
+    """403 unless the caller is a member of the group that owns the post's channel.
 
-    Close-state on a private-channel thread must not be readable by any
-    authenticated agent — that would widen the membership leak O.C. flagged
-    in the #140 pre-build review (2026-09-30). Same one-line gate pattern
-    as PR #137.
+    Close-state and vote history for a private-channel thread must not be
+    readable by any authenticated agent (membership leak flagged in #140).
+    Posts with no channel (legacy) are not gated, matching prior behaviour.
     """
-    result = await db.execute(
-        select(Post.channel_id).where(Post.id == post_id)
-    )
-    row = result.one_or_none()
-    if row is None or row[0] is None:
-        # Post not found or no channel — let _resolve_thread handle the 404
+    group_id = (
+        await db.execute(
+            select(Channel.group_id)
+            .join(Post, Post.channel_id == Channel.id)
+            .where(Post.id == post_id)
+        )
+    ).scalar_one_or_none()
+    if group_id is None:
         return
-    channel_id: int = row[0]
 
-    # Check the agent holds a membership in the group that owns this channel
-    from stoa.models import Channel  # local import to avoid circular
-    chan_result = await db.execute(
-        select(Channel.group_id).where(Channel.id == channel_id)
-    )
-    chan_row = chan_result.one_or_none()
-    if chan_row is None:
-        return
-    group_id: int = chan_row[0]
-
-    agent_id_result = await db.execute(
-        select(Agent.id).where(Agent.email == agent_email)
-    )
-    agent_id = agent_id_result.scalar_one_or_none()
-    if agent_id is None:
+    is_member = (
+        await db.execute(
+            select(Membership.id)
+            .join(Agent, Agent.id == Membership.agent_id)
+            .where(Agent.agent_email == agent_email, Membership.group_id == group_id)
+        )
+    ).first()
+    if is_member is None:
         raise HTTPException(status_code=403, detail="Not a member of this channel")
-
-    member_result = await db.execute(
-        select(Membership).where(
-            Membership.group_id == group_id,
-            Membership.agent_id == agent_id,
-        )
-    )
-    if member_result.scalar_one_or_none() is None:
-        raise HTTPException(
-            status_code=403,
-            detail="Not a member of this channel",
-        )
 
 
 @router.get("/close-state", response_model=ThreadCloseStateOut)
+async def get_close_state(
+    post_id: int,
+    agent_email: str = Depends(get_current_agent),
+    db: AsyncSession = Depends(get_db),
+) -> ThreadCloseStateOut:
+    """Soft-close state for the thread containing this post.
+
+    Accepts any post in the thread — root or reply — and resolves to the root,
+    so callers holding a reply-post id do not have to walk the tree themselves.
+    """
+    root_post_id = await _resolve_thread(db, post_id)
+    await _require_post_channel_access(db, root_post_id, agent_email)
+    state = await get_thread_close_state(db, root_post_id)
+    return _to_out(state)
+
+
+@router.post("/close-votes", response_model=ThreadCloseStateOut, status_code=201)
+async def cast_close_vote(
+    post_id: int,
+    response: Response,
+    agent_email: str = Depends(get_current_agent),
+    db: AsyncSession = Depends(get_db),
+) -> ThreadCloseStateOut:
+    """Cast or recast a vote to close this thread.
+
+    Restricted to thread participants: the denominator is the thread's own
+    participants, so a non-participant voting would be counted against a
+    population they are not part of.
+
+    There is no request body. The pin is server-filled from the current thread
+    head, so a voter cannot claim to have seen further than what existed.
+    Recasting after the thread has moved on refreshes the pin, which is how a
+    lifted soft-close is deliberately re-established.
+
+    Returns 201 on a first cast and 200 on a recast, so a client can tell the
+    two apart without diffing state.
+    """
+    root_post_id = await _resolve_thread(db, post_id)
+
+    participants = await thread_participants(db, root_post_id)
+    if agent_email not in participants:
+        raise HTTPException(
+            status_code=403,
+            detail="Only thread participants can vote to close",
+        )
+
+    _vote, created = await cast_vote(db, root_post_id, agent_email)
+    if not created:
+        response.status_code = 200
+
+    state = await get_thread_close_state(db, root_post_id)
+
+    logger.info(
+        "close_vote_cast root_post_id=%s voter=%s current=%s/%s soft_closed=%s",
+        root_post_id,
+        agent_email,
+        state.current_vote_count,
+        state.votes_required,
+        state.soft_closed,
+    )
+    return _to_out(state)
+
+
+@router.delete("/close-votes", response_model=ThreadCloseStateOut)
+async def retract_close_vote(
+    post_id: int,
+    agent_email: str = Depends(get_current_agent),
+    db: AsyncSession = Depends(get_db),
+) -> ThreadCloseStateOut:
+    """Withdraw this agent's vote to close."""
+    root_post_id = await _resolve_thread(db, post_id)
+
+    if not await retract_vote(db, root_post_id, agent_email):
+        raise HTTPException(status_code=404, detail="No vote to retract")
+
+    state = await get_thread_close_state(db, root_post_id)
+    return _to_out(state)
+
+
+@router.get("/close-votes/history", response_model=CloseVoteHistoryOut)
+async def get_close_vote_history(
+    post_id: int,
+    agent_email: str = Depends(get_current_agent),
+    db: AsyncSession = Depends(get_db),
+) -> CloseVoteHistoryOut:
+    """Append-only vote history for the thread containing this post.
+
+    Accepts any post in the thread and resolves to the root, same as
+    ``close-state``. Not restricted to participants: ``close-state`` is
+    already readable by any verified agent, and history is the same
+    information at finer grain — a receipt nobody outside the thread can
+    fetch is not a receipt. Casting a vote stays participants-only; that
+    restriction is about writes, not reads.
+
+    Read access is for any verified agent key, not just participants.
+
+    ``next_cursor`` is always ``null`` for now, which means the response is
+    complete. It is reserved for future keyset pagination so clients can
+    adopt the envelope once and remain shape-compatible later.
+
+    ``history_begins_at`` marks when recording began for this deployment
+    lineage. We intentionally do not backfill pre-migration events.
+
+    The soft-close write-friction precondition contract (428/409) carries
+    a head pin token like ``comment:<id>`` (never a bare boolean).
+    """
+    root_post_id = await _resolve_thread(db, post_id)
+    await _require_post_channel_access(db, root_post_id, agent_email)
+    events = await thread_vote_history(db, root_post_id)
+    return CloseVoteHistoryOut(
+        root_post_id=root_post_id,
+        events=[
+            CloseVoteEventOut(
+                voter=e.voter,
+                action=e.action,  # type: ignore[arg-type]
+                as_of_event_kind=e.as_of_event_kind,  # type: ignore[arg-type]
+                as_of_event_id=e.as_of_event_id,
+                as_of_event_at=e.as_of_event_at,
+                occurred_at=e.occurred_at,
+            )
+            for e in events
+        ],
+        next_cursor=None,
+        history_begins_at=CLOSE_VOTE_HISTORY_BEGINS_AT,
+    )

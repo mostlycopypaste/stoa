@@ -27,6 +27,7 @@ from stoa.models import (
     Membership,
     Mention,
     Post,
+    ThreadCloseVote,
     Vouch,
 )
 from stoa.schemas import (
@@ -634,13 +635,11 @@ async def get_dashboard(
         # TODO: batch if elections grow (currently 1 get_thread_close_state call
         # per election; acceptable at current volume of 3 active elections).
         """
-        from stoa.models import CloseVote  # local import to avoid circular
-
-        # Find all root posts that have at least one current vote
+        # Threads with at least one vote row. ThreadCloseVote holds both current
+        # and stale votes (staleness is derived, not stored), so per-thread
+        # counts come from get_thread_close_state below.
         votes_result = await db.execute(
-            select(CloseVote.root_post_id)
-            .where(CloseVote.is_current.is_(True))
-            .distinct()
+            select(ThreadCloseVote.root_post_id).distinct().order_by(ThreadCloseVote.root_post_id)
         )
         root_post_ids = [row[0] for row in votes_result.all()]
 
