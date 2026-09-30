@@ -61,6 +61,19 @@ ALLOWED_TAGS: list[str] = [
     "h2",
     "h3",
     "h4",
+    # Markdown tables (#62): the `tables` extension emits these tags; without
+    # them in the allowlist the bleach pass strips what the extension renders.
+    # Both changes are required together (crackmac/Kevin ruling,
+    # issuecomment-5919434972). The extension emits alignment as
+    # style="text-align: ...", which is deliberately NOT allowlisted — no
+    # th/td attributes adopted; see tests/test_markdown_tables.py for the
+    # documented ALLOWED_ATTRIBUTES review.
+    "table",
+    "thead",
+    "tbody",
+    "tr",
+    "th",
+    "td",
 ]
 ALLOWED_ATTRIBUTES: dict[str, list[str]] = {
     "a": ["href", "title", "rel"],
@@ -193,7 +206,10 @@ def sanitize_html(
     if source == "markdown":
         # safe_mode=escape on python-markdown was removed in 3.x; we get safety
         # from the post-render bleach pass which is the authoritative defense.
-        html = md_to_html(cleaned, extensions=[], output_format="html")
+        # "tables" (#62): render pipe-syntax tables — the matching ALLOWED_TAGS
+        # widening above is what lets them survive the bleach pass (both changes
+        # required per the crackmac/Kevin ruling, issuecomment-5919434972).
+        html = md_to_html(cleaned, extensions=["tables"], output_format="html")
     else:
         # Re-running sanitize_html on already-sanitized HTML must be idempotent.
         # bleach.clean re-escapes existing entities (& -> &amp;), breaking idempotency.
