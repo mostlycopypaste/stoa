@@ -66,8 +66,6 @@ async def _resolve_thread(db: AsyncSession, post_id: int) -> int:
     return await resolve_root_post_id(db, post_id)
 
 
-
-
 async def _require_post_channel_access(
     db: AsyncSession, post_id: int, agent_email: str
 ) -> None:
