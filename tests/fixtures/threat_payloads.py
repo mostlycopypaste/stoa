@@ -156,6 +156,55 @@ MARKDOWN_ATTACKS = [
     ("MD-06", "Title\n=====\n<script>alert(1)</script>", "html_strip", ["<script"]),
 ]
 
+TABLE_XSS = [
+    # Table-markup XSS — added with the #62 sanitizer-surface widening (table,
+    # thead, tbody, tr, th, td joined ALLOWED_TAGS): table markup must not
+    # become a new vector. Per the ruling (crackmac/Kevin,
+    # issuecomment-5919434972), every allowlist widening ships with payloads.
+    (
+        "TBL-01",
+        '<table><tr><td onclick="alert(1)">cell</td></tr></table>',
+        "html_strip",
+        ["onclick"],
+    ),
+    (
+        "TBL-02",
+        '<table><thead><tr><th onmouseover="alert(1)">h</th></tr></thead></table>',
+        "html_strip",
+        ["onmouseover"],
+    ),
+    (
+        "TBL-03",
+        '<table><tr><td><a href="javascript:alert(1)">x</a></td></tr></table>',
+        "url_reject",
+        ["javascript:"],
+    ),
+    (
+        "TBL-04",
+        "<table><tr><td><script>alert(1)</script></td></tr></table>",
+        "html_strip",
+        ["<script"],
+    ),
+    (
+        "TBL-05",
+        '<table><tr><td style="text-align: left; background: url(javascript:alert(1))">x</td></tr></table>',
+        "html_strip",
+        ["javascript:", "background", "style="],
+    ),
+    (
+        "TBL-06",
+        '<table><tbody><tr><td><iframe src="https://evil.example/x"></iframe></td></tr></tbody></table>',
+        "html_strip",
+        ["<iframe", "evil"],
+    ),
+    (
+        "TBL-07",
+        "| [link](javascript:alert(1)) | b |\n|---|---|\n| 1 | 2 |",
+        "url_reject",
+        ["javascript:"],
+    ),
+]
+
 EMAIL_PAYLOADS = [
     (
         "EM-01",
@@ -201,7 +250,13 @@ INVISIBLE_CHARS = [
 
 # Aggregate — tests parametrize over this combined list
 ALL_HTML_PAYLOADS = (
-    CLASSIC_XSS + MUTATION_XSS + CSP_PAYLOADS + PROMPT_INJECTION + MARKDOWN_ATTACKS + EMAIL_PAYLOADS
+    CLASSIC_XSS
+    + MUTATION_XSS
+    + CSP_PAYLOADS
+    + PROMPT_INJECTION
+    + MARKDOWN_ATTACKS
+    + EMAIL_PAYLOADS
+    + TABLE_XSS
 )
 
 # Allowed-tag preservation cases (sanitizer must KEEP these intact)
@@ -215,6 +270,14 @@ PRESERVE_PAYLOADS = [
     ("PRES-03", "<ul><li>one</li><li>two</li></ul>", ["<ul>", "<li>"]),
     ("PRES-04", "<blockquote><p>quoted</p></blockquote>", ["<blockquote>", "quoted"]),
     ("PRES-05", "<code class='language-python'>x = 1</code>", ["<code", "x = 1"]),
+    # #62: table structure is now allowlisted — the sanitizer must KEEP it
+    # intact (mirror of the TBL-* payloads, which assert the dangerous parts
+    # are stripped).
+    (
+        "PRES-06",
+        "<table><thead><tr><th>h</th></tr></thead><tbody><tr><td>d</td></tr></tbody></table>",
+        ["<table>", "<thead>", "<tbody>", "<th>", "<td>"],
+    ),
 ]
 
 LOG_INJECTION_PAYLOADS = [
