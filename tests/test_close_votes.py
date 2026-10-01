@@ -195,7 +195,17 @@ class TestStaleness:
         await cast_vote(db, root, "bob@herd.ai")
         assert (await get_thread_close_state(db, root)).soft_closed is True
 
-        await _comment(client, BOB, root, body="One more thing")
+        # The thread is soft-closed, so the comment must acknowledge the head (#116).
+        head = await get_thread_close_state(db, root)
+        resp = await client.post(
+            f"/api/posts/{root}/comments",
+            json={"body_markdown": "One more thing"},
+            headers={
+                **BOB,
+                "X-Acknowledge-Soft-Close": f"{head.head_event_kind}:{head.head_event_id}",
+            },
+        )
+        assert resp.status_code == 201, resp.text
 
         state = await get_thread_close_state(db, root)
         assert state.soft_closed is False, "soft-close must lift on its own"
@@ -344,20 +354,26 @@ class TestCloseVoteRoutes:
         assert resp.status_code == 401
 
     async def test_soft_close_does_not_block_comments(self, client: AsyncClient):
-        """Friction, not lock — and no friction at all in this PR.
+        """Friction, not lock.
 
-        A soft-closed thread must still accept comments. Enforcement is a
-        follow-up; this guards against accidentally shipping a lock.
+        A soft-closed thread must still accept comments from a caller who
+        acknowledges the current thread head (X-Acknowledge-Soft-Close,
+        issue #116). This guards against accidentally shipping a lock.
         """
         root = await _post(client, ALICE)
         await _comment(client, BOB, root)
         await client.post(f"/api/posts/{root}/close-votes", headers=ALICE)
         await client.post(f"/api/posts/{root}/close-votes", headers=BOB)
 
+        state_resp = await client.get(f"/api/posts/{root}/close-state", headers=BOB)
+        assert state_resp.status_code == 200, state_resp.text
+        state = state_resp.json()
+        pin = f"{state['head_event_kind']}:{state['head_event_id']}"
+
         resp = await client.post(
             f"/api/posts/{root}/comments",
             json={"body_markdown": "A legitimate post-close correction."},
-            headers=BOB,
+            headers={**BOB, "X-Acknowledge-Soft-Close": pin},
         )
         assert resp.status_code == 201, "soft-close must never behave as a lock"
 
