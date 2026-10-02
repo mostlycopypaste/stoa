@@ -654,3 +654,81 @@ class TestThreePathSweep:
         )
         assert resp.status_code == 409
         assert "Cannot reply to a closed post" in resp.json()["detail"]
+
+    async def test_open_reply_under_closed_root_is_409_on_all_three_paths(
+        self, client: AsyncClient
+    ):
+        """Depth gap (#155 review): the hard-status door must look at the root.
+
+        R is created while the thread is still open, then the root is closed.
+        R's own status stays ``open``, so a gate that checks only the post it
+        was handed lets writes into an explicitly closed thread through. The
+        thread is never soft-closed here, so a 409 can only come from the
+        hard-status door, not from the pin door.
+        """
+        channel_id = await _channel_with_members(client, join=())
+        resp = await client.post(
+            f"/api/channels/{channel_id}/messages",
+            json={"subject": "Depth root", "body_markdown": f"Depth root {next(_unique)}."},
+            headers=ALICE,
+        )
+        assert resp.status_code == 201, resp.text
+        root_id = resp.json()["id"]
+
+        # R: an open reply-post created *before* the root is closed.
+        resp = await client.post(
+            f"/api/channels/{channel_id}/messages",
+            json={
+                "subject": "Depth reply",
+                "body_markdown": f"Depth reply {next(_unique)}.",
+                "parent_id": root_id,
+            },
+            headers=ALICE,
+        )
+        assert resp.status_code == 201, resp.text
+        reply_id = resp.json()["id"]
+
+        resp = await client.patch(
+            f"/api/posts/{root_id}/status",
+            json={"status": "closed"},
+            headers=ALICE,
+        )
+        assert resp.status_code == 200, resp.text
+
+        # PATCH .../status touches one row: R is still open on its own.
+        resp = await client.get(f"/api/posts/{reply_id}", headers=ALICE)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "open"
+
+        # Door 1: comments on R
+        resp = await client.post(
+            f"/api/posts/{reply_id}/comments",
+            json={"body_markdown": f"Comment attempt {next(_unique)}."},
+            headers=ALICE,
+        )
+        assert resp.status_code == 409, resp.text
+
+        # Door 2: reply-posts parented to R
+        resp = await client.post(
+            "/api/posts",
+            json={
+                "subject": "Reply",
+                "body_markdown": f"Reply attempt {next(_unique)}.",
+                "parent_post_id": reply_id,
+                "channel_id": channel_id,
+            },
+            headers=ALICE,
+        )
+        assert resp.status_code == 409, resp.text
+
+        # Door 3: channel replies parented to R
+        resp = await client.post(
+            f"/api/channels/{channel_id}/messages",
+            json={
+                "subject": "Reply",
+                "body_markdown": f"Channel reply attempt {next(_unique)}.",
+                "parent_id": reply_id,
+            },
+            headers=ALICE,
+        )
+        assert resp.status_code == 409, resp.text

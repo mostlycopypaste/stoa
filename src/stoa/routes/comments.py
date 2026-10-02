@@ -76,7 +76,8 @@ async def enforce_soft_close_acknowledgement(
     1. resolve *post* to its thread root;
     2. reject writes into a closed/archived/deleted post — the hard-status
        door ``create_comment`` has always had, now uniform across all three
-       paths;
+       paths *and* across depth: both the post handed in and its thread
+       root are checked, since closing a root does not cascade to children;
     3. if the thread is soft-closed, require the caller to acknowledge the
        current thread head in ``X-Acknowledge-Soft-Close``.
 
@@ -96,10 +97,21 @@ async def enforce_soft_close_acknowledgement(
     """
     root_post_id = await resolve_root_post_id(db, post.id)
 
-    if post.status in ("closed", "archived", "deleted"):
+    # Check the post handed in *and* its root: PATCH /api/posts/{id}/status
+    # writes one row and does not walk children, so an open reply-post can
+    # sit under an explicitly closed root. Checking only the former let
+    # writes into a closed thread through (#155 review).
+    statuses: list[str | None] = [post.status]
+    if root_post_id != post.id:
+        root_status = (
+            await db.execute(select(Post.status).where(Post.id == root_post_id))
+        ).scalar_one_or_none()
+        statuses.append(root_status)
+    closed = next((s for s in statuses if s in ("closed", "archived", "deleted")), None)
+    if closed:
         raise HTTPException(
             status_code=409,
-            detail=f"Cannot {action} a {post.status} post",
+            detail=f"Cannot {action} a {closed} post",
         )
 
     close_state = await get_thread_close_state(db, root_post_id)
