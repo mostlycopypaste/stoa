@@ -1,6 +1,6 @@
 """Close-state channel gate and dashboard close_elections surface (issue #140).
 
-Two things are pinned here:
+Three things are pinned here:
 
 * ``close-state`` and ``close-votes/history`` on a channel-scoped thread are
   403 for non-members of the owning group (same posture as PR #137), while
@@ -8,7 +8,13 @@ Two things are pinned here:
 * ``GET /api/me/dashboard`` lists close elections only for threads where the
   caller is a participant, so a private thread's vote activity never appears
   on an outsider's dashboard.
+* Since #149 the dashboard's ``close_elections`` section is cursor-bound like
+  the other sections: an election appears only when its thread had close-vote
+  activity after the caller's dashboard watermark, and settled elections
+  (all votes stale, not soft-closed) never appear at all.
 """
+
+from typing import Any
 
 from httpx import AsyncClient
 
@@ -111,3 +117,185 @@ class TestDashboardCloseElections:
         resp = await client.get("/api/me/dashboard", headers=BOB)
         assert resp.status_code == 200
         assert resp.json()["close_elections"] == []
+
+
+# --- Issue #149: close_elections joins the dashboard-cursor idiom ---------
+#
+# Before #149 the section was a state snapshot: it returned every
+# participant-visible election on every poll and settled elections never
+# dropped off, so an agent participating in any voted thread could never
+# reach the "nothing to do" fast path. Approved shape (#149 evaluation
+# 2026-09-30, operator decision 2026-10-02): Options 1 + 3 in one query — an
+# election appears only when its thread had close-vote activity (a
+# cast/recast/retract, which includes the closing vote of a soft-close
+# transition) after the caller's dashboard cursor, and settled elections
+# (all votes stale, not soft-closed) are excluded outright.
+#
+# The participant gate stays thread_participants() — commenters ∪ voters ∪
+# author — and the commenter test below pins the sharp edge from the #149
+# evaluation: a SQL shortcut keyed on voters + authors only would silently
+# drop commenter-participants who never voted.
+
+
+async def _comment(client: AsyncClient, post_id: int, headers: dict) -> int:
+    """Comment on a post, growing the thread; return the comment id."""
+    resp = await client.post(
+        f"/api/posts/{post_id}/comments",
+        json={"body_markdown": "Comment for the close-election cursor tests."},
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    return int(resp.json()["id"])
+
+
+async def _cast(client: AsyncClient, post_id: int, headers: dict) -> dict[str, Any]:
+    """Cast a close vote and return the resulting close-state payload."""
+    resp = await client.post(f"/api/posts/{post_id}/close-votes", headers=headers)
+    assert resp.status_code in (200, 201), resp.text
+    return resp.json()
+
+
+class TestDashboardCloseElectionsCursor:
+    """Cursor-bound close_elections semantics (issue #149, Options 1 + 3)."""
+
+    async def test_no_activity_since_ack_returns_empty(self, client: AsyncClient) -> None:
+        """Ack, then re-poll with no vote activity: the fast path works again."""
+        post_id = await _unscoped_post(client)
+        await _cast(client, post_id, ALICE)
+
+        ack = await client.post("/api/me/dashboard/seen", headers=ALICE)
+        assert ack.status_code == 200, ack.text
+
+        resp = await client.get("/api/me/dashboard", headers=ALICE)
+        assert resp.status_code == 200
+        assert resp.json()["close_elections"] == []
+
+    async def test_new_vote_after_ack_appears(self, client: AsyncClient) -> None:
+        """Vote activity inside the window surfaces the election, pending or not."""
+        post_id = await _unscoped_post(client)
+        await _comment(client, post_id, BOB)  # Bob becomes a participant.
+
+        ack = await client.post("/api/me/dashboard/seen", headers=ALICE)
+        assert ack.status_code == 200, ack.text
+
+        await _cast(client, post_id, BOB)  # 1/2 — pending, not soft-closed.
+
+        resp = await client.get("/api/me/dashboard", headers=ALICE)
+        assert resp.status_code == 200
+        elections = resp.json()["close_elections"]
+        assert len(elections) == 1
+        election = elections[0]
+        assert election["root_post_id"] == post_id
+        assert election["current_vote_count"] == 1
+        assert election["soft_closed"] is False
+
+    async def test_soft_closed_transition_after_ack_appears(self, client: AsyncClient) -> None:
+        """A soft-close transition that lands inside the window is visible."""
+        post_id = await _unscoped_post(client)
+        await _comment(client, post_id, BOB)
+
+        ack = await client.post("/api/me/dashboard/seen", headers=ALICE)
+        assert ack.status_code == 200, ack.text
+
+        await _cast(client, post_id, BOB)
+        state = await _cast(client, post_id, ALICE)  # 2/2 → soft-closed.
+        assert state["soft_closed"] is True
+
+        resp = await client.get("/api/me/dashboard", headers=ALICE)
+        assert resp.status_code == 200
+        elections = resp.json()["close_elections"]
+        assert len(elections) == 1
+        election = elections[0]
+        assert election["root_post_id"] == post_id
+        assert election["current_vote_count"] == 2
+        assert election["soft_closed"] is True
+
+    async def test_poller_that_acked_before_soft_closed_transition_still_surfaces_it(
+        self, client: AsyncClient
+    ) -> None:
+        """Named #149 acceptance case: an ack before the transition must not eat it.
+
+        A poller whose watermark predates a soft-close transition still sees
+        the election on every re-poll until it explicitly acks the new window.
+        The #116 unpark's step-3 observation path depends on exactly this: the
+        GET is idempotent (#103), the cursor moves only on
+        POST /me/dashboard/seen.
+        """
+        post_id = await _unscoped_post(client)
+        await _comment(client, post_id, BOB)
+
+        ack = await client.post("/api/me/dashboard/seen", headers=ALICE)
+        assert ack.status_code == 200, ack.text
+
+        await _cast(client, post_id, BOB)
+        await _cast(client, post_id, ALICE)  # Transition lands after the ack.
+
+        first = await client.get("/api/me/dashboard", headers=ALICE)
+        assert first.status_code == 200
+        first_elections = first.json()["close_elections"]
+        assert len(first_elections) == 1
+        assert first_elections[0]["soft_closed"] is True
+
+        # Re-poll without acking: the transition replays until acked.
+        second = await client.get("/api/me/dashboard", headers=ALICE)
+        assert second.status_code == 200
+        second_elections = second.json()["close_elections"]
+        assert len(second_elections) == 1
+        assert second_elections[0]["soft_closed"] is True
+
+    async def test_settled_and_acked_soft_closed_thread_absent(self, client: AsyncClient) -> None:
+        """A soft-closed thread whose transition is already acked disappears."""
+        post_id = await _unscoped_post(client)
+        state = await _cast(client, post_id, ALICE)  # 1/1 → soft-closed.
+        assert state["soft_closed"] is True
+
+        ack = await client.post("/api/me/dashboard/seen", headers=ALICE)
+        assert ack.status_code == 200, ack.text
+
+        resp = await client.get("/api/me/dashboard", headers=ALICE)
+        assert resp.status_code == 200
+        assert resp.json()["close_elections"] == []
+
+    async def test_stale_only_not_soft_closed_thread_never_appears(
+        self, client: AsyncClient
+    ) -> None:
+        """Option 3: all-stale, not-soft-closed is settled — gone even on first fetch."""
+        post_id = await _unscoped_post(client)
+        await _comment(client, post_id, BOB)  # Participants: Alice + Bob; required 2.
+
+        await _cast(client, post_id, ALICE)  # 1/2 — pending, never soft-closed.
+
+        # Thread growth moves the head past the vote's pin: the vote goes
+        # stale and the election settles without ever soft-closing.
+        await _comment(client, post_id, BOB)
+        close_state = await client.get(f"/api/posts/{post_id}/close-state", headers=ALICE)
+        assert close_state.status_code == 200, close_state.text
+        assert close_state.json()["stale_vote_count"] == 1
+        assert close_state.json()["soft_closed"] is False
+
+        resp = await client.get("/api/me/dashboard", headers=ALICE)
+        assert resp.status_code == 200
+        assert resp.json()["close_elections"] == []
+
+    async def test_commenter_participant_sees_election(self, client: AsyncClient) -> None:
+        """Sharp edge (#149 evaluation): a commenter who never voted still sees it.
+
+        The participant gate is the full union — commenters ∪ voters ∪ author.
+        A SQL shortcut keyed on voters + authors only would silently drop
+        this agent; thread_participants() keeps the union whole.
+        """
+        post_id = await _unscoped_post(client)
+        await _comment(client, post_id, BOB)  # Bob: commenter only, never a voter.
+
+        ack = await client.post("/api/me/dashboard/seen", headers=BOB)
+        assert ack.status_code == 200, ack.text
+
+        await _cast(client, post_id, ALICE)  # Vote activity inside Bob's window.
+
+        resp = await client.get("/api/me/dashboard", headers=BOB)
+        assert resp.status_code == 200
+        elections = resp.json()["close_elections"]
+        assert len(elections) == 1
+        election = elections[0]
+        assert election["root_post_id"] == post_id
+        assert election["current_vote_count"] == 1

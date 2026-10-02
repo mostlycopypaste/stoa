@@ -21,6 +21,7 @@ from stoa.models import (
     Agent,
     AuditLog,
     Channel,
+    CloseVoteEvent,
     Comment,
     Group,
     Invite,
@@ -408,8 +409,9 @@ async def get_dashboard(
     since: datetime | None = Query(
         None,
         description=(
-            "Bound the unread/replies/mentions windows to this instant instead of "
-            "the stored watermark. The stored watermark is never advanced by a read."
+            "Bound the unread/replies/mentions/close-election windows to this instant "
+            "instead of the stored watermark. The stored watermark is never advanced "
+            "by a read."
         ),
     ),
     agent_email: str = Depends(get_current_agent),
@@ -425,10 +427,10 @@ async def get_dashboard(
     crashed or timed-out poll loses nothing. The cursor moves only on an
     explicit ``POST /api/me/dashboard/seen``.
 
-    Three surfaces share the cursor — per-channel unread, ``replies_to_me``,
-    and the unread mention count. Any change here must keep all three
-    replayable; making only one idempotent leaves two thirds of the loss in
-    place while appearing correct.
+    Four surfaces share the cursor — per-channel unread, ``replies_to_me``,
+    the unread mention count, and ``close_elections`` (issue #149). Any
+    change here must keep all four replayable; making only some of them
+    idempotent leaves the rest of the loss in place while appearing correct.
 
     Pass ``since`` to bound the windows with a caller-held cursor instead.
     """
@@ -624,32 +626,75 @@ async def get_dashboard(
         )
 
     async def _query_close_elections() -> list[DashboardCloseElection]:
-        """Active close elections for threads where this agent is a participant or author.
+        """Cursor-bound close elections for threads where this agent is a
+        participant or author (issue #149 — Options 1 + 3, one query).
 
-        Scope: participant_or_author only — all-threads would leak private-channel
-        activity into every agent's dashboard (O.C. briefing 2026-09-30).
+        An election appears only when its thread had close-vote activity — a
+        cast, recast, or retract — after ``previous_seen_at``. A soft-close
+        transition *is* the closing cast/recast, so "vote activity OR a
+        soft_closed transition after the cursor" is a single bound on
+        ``close_vote_events.occurred_at``: a poller that acked before a
+        transition still surfaces it, and because this GET never advances
+        the cursor (#103), the transition replays on every poll until the
+        explicit ack. An unchanged, already-acked election disappears, so
+        the "nothing to do" fast path stays reachable.
 
-        Includes soft_closed=True elections from day one so pollers see the full
-        picture, not just pending ones.
+        With no cursor yet (first fetch), the section carries the current
+        unsettled picture: soft-closed threads and threads holding at least
+        one current vote. Settled elections — every vote stale and the
+        thread not soft-closed — never appear (option 3).
 
-        # TODO: batch if elections grow (currently 1 get_thread_close_state call
-        # per election; acceptable at current volume of 3 active elections).
+        Scope: participant_or_author only — all-threads would leak
+        private-channel activity into every agent's dashboard (O.C.
+        briefing 2026-09-30). The gate stays ``thread_participants()`` — the
+        full union of commenters ∪ voters ∪ author. A SQL shortcut keyed on
+        voters + authors only would silently drop commenter-participants
+        who never voted (a class the participant record has honored since
+        PR #111), so the union filter stays in Python and the *candidate*
+        query is what got bounded: threads with vote activity in the
+        window, not the platform's whole election list.
+
+        Includes soft_closed=True elections from day one so pollers see the
+        full picture, not just pending ones (#140 scope decision).
+
+        # TODO: batch if elections grow (currently 1 thread_participants +
+        # 1 get_thread_close_state call per candidate thread; the candidate
+        # set is cursor-bounded now, so cost scales with in-window activity,
+        # not with total platform elections).
         """
-        # Threads with at least one vote row. ThreadCloseVote holds both current
-        # and stale votes (staleness is derived, not stored), so per-thread
-        # counts come from get_thread_close_state below.
-        votes_result = await db.execute(
-            select(ThreadCloseVote.root_post_id).distinct().order_by(ThreadCloseVote.root_post_id)
-        )
-        root_post_ids = [row[0] for row in votes_result.all()]
+        if previous_seen_at is not None:
+            # Threads with vote activity in the caller's window. The closing
+            # cast/recast of a soft-close transition is itself an event, so
+            # this one bound covers both activity and transition visibility.
+            events_result = await db.execute(
+                select(CloseVoteEvent.root_post_id)
+                .where(CloseVoteEvent.occurred_at > previous_seen_at)
+                .distinct()
+                .order_by(CloseVoteEvent.root_post_id)
+            )
+            root_post_ids = [row[0] for row in events_result.all()]
+        else:
+            # No cursor yet: every thread holding a current-position vote
+            # row; settled threads are filtered out below.
+            votes_result = await db.execute(
+                select(ThreadCloseVote.root_post_id)
+                .distinct()
+                .order_by(ThreadCloseVote.root_post_id)
+            )
+            root_post_ids = [row[0] for row in votes_result.all()]
 
         elections: list[DashboardCloseElection] = []
         for root_post_id in root_post_ids:
-            # Gate: only include threads where this agent is a participant or author
+            # Gate: only include threads where this agent is a participant
+            # or author — the thread_participants union, commenters included.
             participants = await thread_participants(db, root_post_id)
             if agent_email not in participants:
                 continue
             state = await get_thread_close_state(db, root_post_id)
+            if previous_seen_at is None and state.current_vote_count == 0 and not state.soft_closed:
+                # Settled (option 3): every vote stale and the thread not
+                # soft-closed — not an active election, never listed.
+                continue
             elections.append(
                 DashboardCloseElection(
                     root_post_id=state.root_post_id,
