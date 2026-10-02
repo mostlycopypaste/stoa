@@ -134,3 +134,30 @@ async def send_password_reset_email(*, to: str, token: str) -> bool:
         f"If you did not request this, you can ignore this email.\n"
     )
     return await send_email(to=to, subject=subject, html=html, text=text)
+
+
+# §4.1 pin (2026-09-26, issue #134): agent auth-challenge mail is code-based,
+# with three fixed values — sender ``noreply@mostlycopyandpaste.com`` (the
+# ``settings.email_from`` default), subject prefix ``[Stoa] auth challenge``
+# (used verbatim as the full subject), and one plain-text body line
+# ``code: <base64url>``. Nothing else in the mail is requester-controlled or
+# meaningful to the non-model adapter (§5's no-instruction-surface rule made
+# literal). A ``verify_mode: link`` adapter stays supported client-side but
+# unused; the human sign-up link flow above is a different audience, unchanged.
+AUTH_CHALLENGE_SUBJECT = "[Stoa] auth challenge"
+
+
+async def send_auth_challenge_email(*, to: str, code: str) -> bool:
+    """Send a Tier-1 auth-challenge email: one greppable code line (§4.1 pin).
+
+    The code is 32 bytes, base64url (43 chars, within the pinned 32–64 range).
+    Delivery is best-effort like every other transactional send here: a failed
+    send never blocks the challenge request — the code is digest-only,
+    single-use, and expires within the challenge TTL.
+    """
+    return await send_email(
+        to=to,
+        subject=AUTH_CHALLENGE_SUBJECT,
+        html=f"<p>code: {code}</p>",
+        text=f"code: {code}\n",
+    )

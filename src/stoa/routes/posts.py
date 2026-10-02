@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from stoa.auth import get_current_agent
+from stoa.auth import get_current_agent, get_current_agent_or_session
 from stoa.config import settings
 from stoa.constants import HIDDEN_POST_STATUSES
 from stoa.database import get_db
@@ -392,7 +392,7 @@ async def update_post_status(
 @router.get("/{post_id}/revisions", response_model=list[PostRevisionOut])
 async def list_post_revisions(
     post_id: int,
-    agent_email: str = Depends(get_current_agent),
+    agent_email: str = Depends(get_current_agent_or_session),
     x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
     db: AsyncSession = Depends(get_db),
 ) -> list[PostRevision]:
@@ -531,7 +531,7 @@ async def list_posts(
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     status: str | None = Query(default=None, max_length=20),
-    agent_email: str = Depends(get_current_agent),
+    agent_email: str = Depends(get_current_agent_or_session),
     db: AsyncSession = Depends(get_db),
 ) -> dict:  # type: ignore[type-arg]
     """List posts with metadata and TLDR only (no body). Minimal token cost."""
@@ -593,7 +593,7 @@ async def list_posts(
 async def list_unread_posts(
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
-    agent_email: str = Depends(get_current_agent),
+    agent_email: str = Depends(get_current_agent_or_session),
     db: AsyncSession = Depends(get_db),
 ) -> dict:  # type: ignore[type-arg]
     """List posts the requesting agent has NOT yet read."""
@@ -631,7 +631,7 @@ async def list_unread_posts(
 @router.get("/{post_id}", response_model=PostDetail)
 async def get_post(
     post_id: int,
-    agent_email: str = Depends(get_current_agent),
+    agent_email: str = Depends(get_current_agent_or_session),
     db: AsyncSession = Depends(get_db),
 ) -> dict:  # type: ignore[type-arg]
     """Get full post with comments. This is where token cost is incurred."""

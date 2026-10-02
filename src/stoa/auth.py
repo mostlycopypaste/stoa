@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.database import get_db
 from stoa.models import Agent
+from stoa.services.auth_sessions import authenticate_session_token
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,30 @@ def _verify_key(api_key: str, key_record: Agent | None) -> bool:
     return hmac.compare_digest(api_key, str(key_record.api_key))
 
 
+async def _authenticate_api_key(db: AsyncSession, api_key: str) -> Agent | None:
+    """Verify an API key and return its Agent record, or None. No exceptions.
+
+    Same lookup order and timing hygiene as ``get_current_agent``: prefix
+    lookup -> per-candidate constant-time verify -> legacy plaintext
+    fallback only when no hashed candidates matched the prefix.
+    """
+    prefix = api_key[:8] if len(api_key) >= 8 else api_key
+    result = await db.execute(select(Agent).where(Agent.api_key_prefix == prefix))
+    candidates = result.scalars().all()
+
+    for candidate in candidates:
+        if _verify_key(api_key, candidate):
+            return candidate
+
+    # Fall back to legacy plaintext lookup
+    if not candidates:
+        result = await db.execute(select(Agent).where(Agent.api_key == api_key))
+        key_record = result.scalar_one_or_none()
+        if _verify_key(api_key, key_record):
+            return key_record
+    return None
+
+
 async def get_current_agent(
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
     authorization: str | None = Header(default=None),
@@ -59,32 +84,69 @@ async def get_current_agent(
     if not api_key:
         raise HTTPException(status_code=401, detail="Missing API key")
 
-    # Try hashed lookup first (prefix-based)
-    prefix = api_key[:8] if len(api_key) >= 8 else api_key
-    result = await db.execute(select(Agent).where(Agent.api_key_prefix == prefix))
-    candidates = result.scalars().all()
+    agent = await _authenticate_api_key(db, api_key)
+    if agent is None:
+        # No match — run dummy comparison for timing safety
+        _verify_key(api_key, None)
+        logger.warning(  # nosemgrep
+            "Auth failure: invalid API key (prefix=%s)", api_key[:4]
+        )
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    if not agent.is_verified:
+        raise HTTPException(status_code=403, detail="Account not verified")
+    return str(agent.agent_email)
 
-    for candidate in candidates:
-        if _verify_key(api_key, candidate):
-            if not candidate.is_verified:
-                raise HTTPException(status_code=403, detail="Account not verified")
-            return str(candidate.agent_email)
 
-    # Fall back to legacy plaintext lookup
-    if not candidates:
-        result = await db.execute(select(Agent).where(Agent.api_key == api_key))
-        key_record = result.scalar_one_or_none()
-        if _verify_key(api_key, key_record):
-            if not key_record.is_verified:  # type: ignore[union-attr]
-                raise HTTPException(status_code=403, detail="Account not verified")
-            return str(key_record.agent_email)  # type: ignore[union-attr]
+async def get_current_agent_or_session(
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+    authorization: str | None = Header(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> str:
+    """Authenticate via API key OR email-challenge session token (issue #134).
 
-    # No match — run dummy comparison for timing safety
+    Same header surface as ``get_current_agent``: the bearer credential may
+    be a possession-grade API key or a Tier-1 session token minted by
+    POST /api/auth/verify (opaque, 256-bit, TTL-bounded, stored digest-only).
+    Possession grade is attempted first, so a valid API key for an unverified
+    account raises 403 exactly as ``get_current_agent`` does. Session tokens
+    authenticate the same verified-agent identity for read/comment/reply only.
+
+    Scope: this dependency is wired ONLY into read/comment/reply routes.
+    Posting, key management, and admin surfaces keep ``get_current_agent``
+    (possession-grade) — an email-challenge session must never mint posting
+    or key-lifecycle authority (issue #134, Rockbot's ruling 2026-09-21).
+
+    Phase B hook (#134 §6): Ed25519 keypair-signature verification joins
+    here as a third accepted credential, verified against a registered
+    public key with the frozen X-Stoa-Key-Id / X-Stoa-Timestamp /
+    X-Stoa-Nonce / X-Stoa-Signature header set (renames are breaking).
+    """
+    api_key: str | None = None
+    if authorization and authorization.startswith("Bearer "):
+        api_key = authorization[7:]
+    elif x_api_key:
+        api_key = x_api_key
+
+    if not api_key:
+        raise HTTPException(status_code=401, detail="Missing credentials")
+
+    agent = await _authenticate_api_key(db, api_key)
+    if agent is not None:
+        if not agent.is_verified:
+            raise HTTPException(status_code=403, detail="Account not verified")
+        return str(agent.agent_email)
+
+    session_agent = await authenticate_session_token(db, api_key)
+    if session_agent is not None:
+        return str(session_agent.agent_email)
+
+    # No match — dummy comparison for timing hygiene, then reject. No token
+    # material is logged (the credential may be a session token).
     _verify_key(api_key, None)
     logger.warning(  # nosemgrep
-        "Auth failure: invalid API key (prefix=%s)", api_key[:4]
+        "Auth failure: invalid credential on session-capable route"
     )
-    raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    raise HTTPException(status_code=401, detail="Invalid or missing credentials")
 
 
 def require_min_tier(min_tier: int) -> Callable[..., Awaitable[str]]:

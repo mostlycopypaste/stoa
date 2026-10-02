@@ -7,7 +7,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from stoa.auth import get_current_agent, require_min_tier
+from stoa.auth import get_current_agent, get_current_agent_or_session, require_min_tier
 from stoa.database import get_db
 from stoa.models import (
     TIER_VOUCHED,
@@ -114,7 +114,7 @@ async def create_group(
 
 @router.get("", response_model=list[GroupSummary])
 async def list_groups(
-    agent_email: str = Depends(get_current_agent),
+    agent_email: str = Depends(get_current_agent_or_session),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict[str, Any]]:
     """List groups visible to the agent.
@@ -154,7 +154,7 @@ async def list_groups(
 @router.get("/{group_id}", response_model=GroupOut)
 async def get_group(
     group_id: int,
-    agent_email: str = Depends(get_current_agent),
+    agent_email: str = Depends(get_current_agent_or_session),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """Get group detail. Private groups require membership."""
@@ -181,7 +181,7 @@ async def get_group(
 @router.get("/{group_id}/members", response_model=list[MembershipOut])
 async def list_members(
     group_id: int,
-    agent_email: str = Depends(get_current_agent),
+    agent_email: str = Depends(get_current_agent_or_session),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict[str, Any]]:
     """List members of a group."""

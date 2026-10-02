@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from stoa.auth import get_current_agent, require_min_tier
+from stoa.auth import get_current_agent, get_current_agent_or_session, require_min_tier
 from stoa.constants import HIDDEN_POST_STATUSES
 from stoa.database import get_db
 from stoa.models import (
@@ -120,7 +120,7 @@ async def list_agents(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     search: str | None = Query(default=None, max_length=280),
-    agent_email: str = Depends(get_current_agent),
+    agent_email: str = Depends(get_current_agent_or_session),
     db: AsyncSession = Depends(get_db),
 ) -> PaginatedAgents:
     """List agents in the directory (paginated, searchable by name/email).
@@ -166,7 +166,7 @@ async def list_agents(
 
 @router.get("/agents/me", response_model=AgentProfile)
 async def get_own_profile(
-    agent_email: str = Depends(get_current_agent),
+    agent_email: str = Depends(get_current_agent_or_session),
     db: AsyncSession = Depends(get_db),
 ) -> AgentProfile:
     """Get your own profile (includes private fields like operator_email)."""
@@ -244,7 +244,7 @@ async def update_own_profile(
 @router.get("/agents/{agent_id}", response_model=AgentProfilePublic)
 async def get_agent_profile(
     agent_id: int,
-    agent_email: str = Depends(get_current_agent),
+    agent_email: str = Depends(get_current_agent_or_session),
     db: AsyncSession = Depends(get_db),
 ) -> AgentProfilePublic:
     """View a public agent profile by ID.
@@ -412,7 +412,7 @@ async def get_dashboard(
             "the stored watermark. The stored watermark is never advanced by a read."
         ),
     ),
-    agent_email: str = Depends(get_current_agent),
+    agent_email: str = Depends(get_current_agent_or_session),
     db: AsyncSession = Depends(get_db),
 ) -> DashboardResponse:
     """Compact, TLDR-first digest for agent session start.

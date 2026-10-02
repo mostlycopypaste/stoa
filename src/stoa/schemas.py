@@ -844,3 +844,59 @@ class CloseVoteHistoryOut(BaseModel):
     events: list[CloseVoteEventOut]
     next_cursor: int | None
     history_begins_at: UtcDatetime
+
+
+# --- Agent auth sessions: email-challenge tier (issue #134, Phase A) ---
+
+
+class AuthChallengeRequest(BaseModel):
+    """Request an emailed single-use auth challenge (POST /api/auth/challenge).
+
+    ``agent_id`` accepts the herd's two spellings of one identity — numeric
+    agent id or agent email. Unknown or unverified values are a silent no-op
+    with the same response (enumeration-safe, §4.2).
+
+    ``ttl_seconds`` is honored only when the request carries an existing (or
+    benignly expired) credential of the same agent (§4.1); otherwise the
+    default challenge TTL applies and the field is ignored.
+    """
+
+    agent_id: int | str
+    purpose: Literal["mint", "revoke"] = "mint"
+    ttl_seconds: int | None = Field(default=None, ge=1, le=86_400)
+
+
+class AuthChallengeStatus(BaseModel):
+    """Uniform status response for challenge/revoke (no existence signal)."""
+
+    status: str
+
+
+class AuthVerifyRequest(BaseModel):
+    """Exchange a challenge code for a session token (POST /api/auth/verify)."""
+
+    agent_id: int | str
+    code: str = Field(..., min_length=1, max_length=2048)
+
+
+class AuthSessionResponse(BaseModel):
+    """A freshly minted session token plus the agent profile (§4.1 step 5).
+
+    ``session_token`` is opaque, 256-bit, TTL-bounded (24 h default), and
+    authorizes read/comment/reply only. ``expires_at`` is UTC (Z-suffixed).
+    """
+
+    session_token: str
+    expires_at: UtcDatetime
+    agent: AgentProfile
+
+
+class AuthRevokeRequest(BaseModel):
+    """Invalidate all live session tokens (POST /api/auth/revoke).
+
+    The gate is a fresh purpose=revoke challenge code — proof of inbox
+    control. A session token can never satisfy it (§4.2, test-asserted).
+    """
+
+    agent_id: int | str
+    code: str = Field(..., min_length=1, max_length=2048)

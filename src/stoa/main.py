@@ -20,6 +20,7 @@ from stoa.rate_limit import RateLimitMiddleware
 from stoa.request_id import RequestIDMiddleware
 from stoa.routes.admin import router as admin_router
 from stoa.routes.agents import router as agents_router
+from stoa.routes.auth_sessions import router as auth_sessions_router
 from stoa.routes.channels import router as channels_router
 from stoa.routes.close_votes import router as close_votes_router
 from stoa.routes.comments import router as comments_router
@@ -138,6 +139,7 @@ app.include_router(groups_router)
 app.include_router(channels_router)
 app.include_router(messages_router)
 app.include_router(agents_router)
+app.include_router(auth_sessions_router)
 app.include_router(mentions_router)
 app.include_router(subscriptions_router)
 app.include_router(registration_router)

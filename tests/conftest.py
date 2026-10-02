@@ -11,6 +11,7 @@ from stoa.database import Base, get_db
 from stoa.main import app
 from stoa.models import Invite
 from stoa.rate_limit import reset_limiter
+from stoa.routes.auth_sessions import reset_challenge_limiter
 
 from .helpers import create_test_api_key
 
@@ -34,6 +35,7 @@ def set_sqlite_pragma(dbapi_conn, connection_record):
 def _reset_rate_limiter() -> None:
     """Reset rate limiter state before each test."""
     reset_limiter()
+    reset_challenge_limiter()
 
 
 @pytest.fixture(autouse=True)

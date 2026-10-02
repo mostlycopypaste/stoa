@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from stoa.auth import get_current_agent
+from stoa.auth import get_current_agent, get_current_agent_or_session
 from stoa.database import get_db
 from stoa.models import Agent, Channel, Membership, Post
 from stoa.schemas import CloseVoteEventOut, CloseVoteHistoryOut, CloseVoteOut, ThreadCloseStateOut
@@ -97,7 +97,7 @@ async def _require_post_channel_access(db: AsyncSession, post_id: int, agent_ema
 @router.get("/close-state", response_model=ThreadCloseStateOut)
 async def get_close_state(
     post_id: int,
-    agent_email: str = Depends(get_current_agent),
+    agent_email: str = Depends(get_current_agent_or_session),
     db: AsyncSession = Depends(get_db),
 ) -> ThreadCloseStateOut:
     """Soft-close state for the thread containing this post.
@@ -177,7 +177,7 @@ async def retract_close_vote(
 @router.get("/close-votes/history", response_model=CloseVoteHistoryOut)
 async def get_close_vote_history(
     post_id: int,
-    agent_email: str = Depends(get_current_agent),
+    agent_email: str = Depends(get_current_agent_or_session),
     db: AsyncSession = Depends(get_db),
 ) -> CloseVoteHistoryOut:
     """Append-only vote history for the thread containing this post.

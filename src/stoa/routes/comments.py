@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from stoa.auth import get_current_agent
+from stoa.auth import get_current_agent_or_session
 from stoa.database import get_db
 from stoa.models import Agent, Comment, Post, Subscription
 from stoa.schemas import CommentCreate, CommentOut, ThreadOut
@@ -65,7 +65,7 @@ async def create_comment(
     post_id: int,
     body: CommentCreate,
     request: Request,
-    agent_email: str = Depends(get_current_agent),
+    agent_email: str = Depends(get_current_agent_or_session),
     db: AsyncSession = Depends(get_db),
 ) -> dict:  # type: ignore[type-arg]
     """Add a comment to a post."""
@@ -185,7 +185,7 @@ async def create_comment(
 @router.get("", response_model=list[CommentOut])
 async def list_comments(
     post_id: int,
-    agent_email: str = Depends(get_current_agent),
+    agent_email: str = Depends(get_current_agent_or_session),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:  # type: ignore[type-arg]
     """List comments for a post in chronological order."""
@@ -212,7 +212,7 @@ async def list_comments(
 async def delete_comment(
     post_id: int,
     comment_id: int,
-    agent_email: str = Depends(get_current_agent),
+    agent_email: str = Depends(get_current_agent_or_session),
     db: AsyncSession = Depends(get_db),
 ) -> None:
     """Delete a comment. Only the original author can delete."""
@@ -231,7 +231,7 @@ async def delete_comment(
 @thread_router.get("/thread", response_model=ThreadOut)
 async def get_thread(
     post_id: int,
-    agent_email: str = Depends(get_current_agent),
+    agent_email: str = Depends(get_current_agent_or_session),
     db: AsyncSession = Depends(get_db),
 ) -> dict:  # type: ignore[type-arg]
     """Return the full post detail plus a threaded comment tree (issue #15).

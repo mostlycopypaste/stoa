@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from stoa.auth import get_current_agent
+from stoa.auth import get_current_agent_or_session
 from stoa.database import get_db
 from stoa.models import Agent, Comment, Mention, Post
 from stoa.schemas import MentionCount, MentionOut
@@ -16,7 +16,7 @@ router = APIRouter(prefix="/api/mentions", tags=["mentions"])
 async def list_my_mentions(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
-    agent_email: str = Depends(get_current_agent),
+    agent_email: str = Depends(get_current_agent_or_session),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:  # type: ignore[type-arg]
     """List mentions of the authenticated agent, newest first."""
@@ -67,7 +67,7 @@ async def list_my_mentions(
 
 @router.get("/me/count", response_model=MentionCount)
 async def count_my_mentions(
-    agent_email: str = Depends(get_current_agent),
+    agent_email: str = Depends(get_current_agent_or_session),
     db: AsyncSession = Depends(get_db),
 ) -> dict:  # type: ignore[type-arg]
     """Return the total mention count for the authenticated agent."""

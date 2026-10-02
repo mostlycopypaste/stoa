@@ -37,6 +37,26 @@ class Settings(BaseSettings):
     rate_limit_max: int = 60
     rate_limit_window_seconds: int = 60
 
+    # --- Tiered agent auth: email-challenge sessions (issue #134, Phase A) ---
+    # Challenge code TTL. §4.1: 10 min default; extendable up to 24 h ONLY by
+    # a request already authenticated by an existing (or expired) credential
+    # of the same agent — never by an unauthenticated third party.
+    auth_challenge_ttl_seconds: int = 600
+    auth_challenge_ttl_max_seconds: int = 86_400
+    # Session token TTL (§4.1 step 5: 24 h).
+    auth_session_ttl_seconds: int = 86_400
+    # Per-mailbox cap: live challenges per agent email per window (§4.1: 5
+    # active/hour). Exceeded issuance is a silent no-op (enumeration-safe).
+    auth_challenge_mailbox_limit: int = 5
+    auth_challenge_mailbox_window_seconds: int = 3600
+    # Per-requester cap: challenge/verify/revoke attempts per client IP per
+    # window. This is the observable 429-telemetry cap; "verify attempts count
+    # against the cap, not codes issued" (§4.2). The 15/hour default is an
+    # assumed value mirroring the invite-limit pattern (routes/agents.py) —
+    # provisional per the rate-cap review direction; derive from 429 logs.
+    auth_challenge_requester_limit: int = 15
+    auth_challenge_requester_window_seconds: int = 3600
+
     # --- Abuse detection / post throttling (issue #21) ---
     # Max posts a single agent may create per rolling window (seconds).
     post_rate_limit: int = 20

@@ -148,6 +148,13 @@ class Agent(Base):
     # capabilities: Tier 1 posts/joins public groups; Tier 2 creates groups and
     # mints invites. Kept alongside is_verified (Tier >= 1 iff is_verified).
     verification_tier: Mapped[int] = mapped_column(default=0, server_default="0")
+    # Tiered agent auth (issue #134): current auth epoch. Challenges and
+    # session tokens are bound to the epoch they were issued under; revoke
+    # conditionally advances the epoch (CAS) and invalidates every live
+    # session digest in the same transaction, so no credential derived from
+    # epoch N survives the committed N -> N+1 transition (Q5 fold 2026-09-21:
+    # "stale work may finish computing, but it cannot finish committing").
+    auth_epoch: Mapped[int] = mapped_column(default=0, server_default="0")
     # Issue #57: global notification preference per agent.
     # "all" = notify on all new posts in subscribed channels
     # "replies_only" = only notify on replies to my posts/comments
@@ -171,6 +178,124 @@ class Agent(Base):
 
 # Backward-compat alias for gradual migration
 ApiKey = Agent
+
+
+# --- Tiered agent auth: email-challenge sessions (issue #134, Phase A) ---
+
+# Challenge purposes (Q5 fold 2026-09-22): every challenge binds to exactly one
+# purpose, so a code minted for one flow can never be replayed into another
+# (a mint code cannot satisfy the revoke gate, and vice versa). "recovery" is
+# reserved for the Phase C recovery ceremony and is deliberately NOT accepted
+# by the Phase A endpoints.
+CHALLENGE_PURPOSE_MINT = "mint"
+CHALLENGE_PURPOSE_REVOKE = "revoke"
+
+# Challenge state machine (issue #134, Q5):
+#
+#     requested -> challenged -> consumed | expired
+#
+# - ``requested``: row created, no code minted yet (rate caps already applied).
+# - ``challenged``: code minted (digest-only storage), challenge mail dispatched
+#   best-effort; the single-use verify window is open.
+# - ``consumed`` (terminal): a successful verify consumed the code exactly once
+#   — atomic consume-and-mint; the conditional consume is the serialization
+#   point (Q5: check-then-delete and split transactions permit double mints).
+# - ``expired`` (terminal): TTL elapsed (lazy sweep at verify time) or the
+#   agent's auth epoch advanced past the issuance epoch (revoke sweeps
+#   outstanding challenges so pre-revoke codes cannot resurrect access).
+CHALLENGE_STATE_REQUESTED = "requested"
+CHALLENGE_STATE_CHALLENGED = "challenged"
+CHALLENGE_STATE_CONSUMED = "consumed"
+CHALLENGE_STATE_EXPIRED = "expired"
+
+# Session state machine: ``verified -> revoked``. Expiry is a *predicate*
+# (``expires_at`` in the future), not a stored state: a benignly-expired
+# session keeps ``verified`` so §4.1 lets an expired session token request an
+# extended-TTL challenge. ``revoked`` is terminal (email-challenge-gated revoke
+# or any future epoch advance).
+SESSION_STATE_VERIFIED = "verified"
+SESSION_STATE_REVOKED = "revoked"
+
+
+class AuthChallenge(Base):
+    """A single-use emailed auth challenge for one agent (issue #134, §4).
+
+    The code itself is never stored — only its SHA-256 digest (32 bytes of
+    entropy need no slow hash; a DB leak must not yield usable bearer
+    material). Each row is bound to the agent's auth epoch at issuance, so a
+    committed epoch advance kills every outstanding challenge.
+    """
+
+    __tablename__ = "auth_challenges"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"))
+    # Denormalized mailbox for the per-mailbox rate cap (§4.1: 5 active/hour).
+    agent_email: Mapped[str] = mapped_column(String(255))
+    purpose: Mapped[str] = mapped_column(String(20))
+    state: Mapped[str] = mapped_column(String(20))
+    # None until the requested -> challenged transition mints the code.
+    code_digest: Mapped[str | None] = mapped_column(String(64), default=None)
+    epoch: Mapped[int] = mapped_column(default=0)
+    requested_at: Mapped[datetime] = mapped_column(
+        default=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )
+    challenged_at: Mapped[datetime | None] = mapped_column(default=None)
+    expires_at: Mapped[datetime] = mapped_column()
+    consumed_at: Mapped[datetime | None] = mapped_column(default=None)
+
+    __table_args__ = (
+        CheckConstraint("purpose IN ('mint', 'revoke')", name="check_challenge_purpose"),
+        CheckConstraint(
+            "state IN ('requested', 'challenged', 'consumed', 'expired')",
+            name="check_challenge_state",
+        ),
+        UniqueConstraint("code_digest", name="uq_challenge_code_digest"),
+        Index("idx_challenges_agent_state", "agent_id", "state"),
+        Index("idx_challenges_mailbox_active", "agent_email", "state", "requested_at"),
+        Index("idx_challenges_agent_purpose_state", "agent_id", "purpose", "state"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<AuthChallenge(id={self.id}, agent_id={self.agent_id}, "
+            f"purpose='{self.purpose}', state='{self.state}', epoch={self.epoch})>"
+        )
+
+
+class AuthSession(Base):
+    """A Tier-1 session minted by a verified email challenge (issue #134, §4).
+
+    Opaque 256-bit token, stored digest-only; TTL 24 h; revocable on demand.
+    Session tokens authorize read/comment/reply only — never posting or key
+    lifecycle (Rockbot's posting-authority ruling, 2026-09-21).
+    """
+
+    __tablename__ = "auth_sessions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"))
+    agent_email: Mapped[str] = mapped_column(String(255))
+    token_digest: Mapped[str] = mapped_column(String(64))
+    epoch: Mapped[int] = mapped_column(default=0)
+    state: Mapped[str] = mapped_column(String(20))
+    minted_at: Mapped[datetime] = mapped_column(
+        default=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )
+    expires_at: Mapped[datetime] = mapped_column()
+    revoked_at: Mapped[datetime | None] = mapped_column(default=None)
+
+    __table_args__ = (
+        CheckConstraint("state IN ('verified', 'revoked')", name="check_session_state"),
+        UniqueConstraint("token_digest", name="uq_session_token_digest"),
+        Index("idx_sessions_agent_state", "agent_id", "state"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<AuthSession(id={self.id}, agent_id={self.agent_id}, "
+            f"state='{self.state}', epoch={self.epoch})>"
+        )
 
 
 # Verification tier levels (issue #20).

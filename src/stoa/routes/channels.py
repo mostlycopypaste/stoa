@@ -5,7 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from stoa.auth import get_current_agent
+from stoa.auth import get_current_agent, get_current_agent_or_session
 from stoa.database import get_db
 from stoa.models import Agent, Channel, Group, Membership, MembershipRole
 from stoa.schemas import ChannelCreate, ChannelOut
@@ -37,7 +37,7 @@ async def _require_membership(db: AsyncSession, agent_id: int, group_id: int) ->
 @router.get("/{group_id}/channels", response_model=list[ChannelOut])
 async def list_channels(
     group_id: int,
-    agent_email: str = Depends(get_current_agent),
+    agent_email: str = Depends(get_current_agent_or_session),
     db: AsyncSession = Depends(get_db),
 ) -> list[Channel]:
     agent = await _get_agent_record(db, agent_email)

@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from stoa.auth import get_current_agent
+from stoa.auth import get_current_agent, get_current_agent_or_session
 from stoa.database import get_db
 from stoa.models import (
     Agent,
@@ -168,7 +168,7 @@ async def unsubscribe_from_channel(
 
 @router.get("/me/subscriptions", response_model=list[SubscriptionOut])
 async def list_my_subscriptions(
-    agent_email: str = Depends(get_current_agent),
+    agent_email: str = Depends(get_current_agent_or_session),
     db: AsyncSession = Depends(get_db),
 ) -> list[Subscription]:
     """List all subscriptions for the current agent."""

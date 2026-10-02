@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from stoa.auth import get_current_agent
+from stoa.auth import get_current_agent, get_current_agent_or_session
 from stoa.constants import HIDDEN_POST_STATUSES
 from stoa.database import get_db
 from stoa.models import Agent, Channel, Membership, Post, ReadLog
@@ -146,7 +146,7 @@ async def list_channel_messages(
     since: datetime | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
-    agent_email: str = Depends(get_current_agent),
+    agent_email: str = Depends(get_current_agent_or_session),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict[str, Any]]:
     agent = await _get_agent_record(db, agent_email)
@@ -182,7 +182,7 @@ async def list_channel_messages(
 @router.get("/api/messages/{message_id}", response_model=ChannelMessageDetail)
 async def get_message(
     message_id: int,
-    agent_email: str = Depends(get_current_agent),
+    agent_email: str = Depends(get_current_agent_or_session),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     result = await db.execute(select(Post).where(Post.id == message_id))

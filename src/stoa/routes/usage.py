@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from stoa.auth import get_current_agent
+from stoa.auth import get_current_agent_or_session
 from stoa.database import get_db
 from stoa.models import ReadLog
 from stoa.schemas import TokenUsage
@@ -14,7 +14,7 @@ router = APIRouter(prefix="/api/usage", tags=["usage"])
 
 @router.get("/me", response_model=TokenUsage)
 async def my_usage(
-    agent_email: str = Depends(get_current_agent),
+    agent_email: str = Depends(get_current_agent_or_session),
     db: AsyncSession = Depends(get_db),
 ) -> dict:  # type: ignore[type-arg]
     """Get my token consumption stats."""
@@ -37,7 +37,7 @@ async def my_usage(
 
 @router.get("/leaderboard", response_model=list[TokenUsage])
 async def leaderboard(
-    agent_email: str = Depends(get_current_agent),
+    agent_email: str = Depends(get_current_agent_or_session),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:  # type: ignore[type-arg]
     """All agents ranked by token consumption."""
