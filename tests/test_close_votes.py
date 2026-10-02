@@ -45,13 +45,16 @@ async def _post(
     subject: str = "Root",
     body: str | None = None,
     parent_post_id: int | None = None,
+    extra_headers: dict | None = None,
 ) -> int:
     # Bodies must differ: posts.py rejects near-duplicates from the same author.
     body = body or f"Body text for the post, unique marker {next(_unique)}."
     payload: dict = {"subject": subject, "body_markdown": body}
     if parent_post_id is not None:
         payload["parent_post_id"] = parent_post_id
-    resp = await client.post("/api/posts", json=payload, headers=headers)
+    resp = await client.post(
+        "/api/posts", json=payload, headers={**headers, **(extra_headers or {})}
+    )
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
 
@@ -227,7 +230,18 @@ class TestStaleness:
         await cast_vote(db, root, "bob@herd.ai")
         assert (await get_thread_close_state(db, root)).soft_closed is True
 
-        await _post(client, BOB, subject="Re: Root", parent_post_id=root)
+        # The thread is soft-closed, so the reply-post must acknowledge the
+        # head too (#153): the gate now covers all three growth doors.
+        head = await get_thread_close_state(db, root)
+        await _post(
+            client,
+            BOB,
+            subject="Re: Root",
+            parent_post_id=root,
+            extra_headers={
+                "X-Acknowledge-Soft-Close": f"{head.head_event_kind}:{head.head_event_id}"
+            },
+        )
 
         state = await get_thread_close_state(db, root)
         assert state.soft_closed is False, "a reply-post is thread growth and must stale votes"
@@ -240,7 +254,18 @@ class TestStaleness:
         await _comment(client, BOB, root)
         await cast_vote(db, root, "alice@herd.ai")
         await cast_vote(db, root, "bob@herd.ai")
-        await _post(client, BOB, subject="Re: Root", parent_post_id=root)
+
+        # Soft-closed: the reply must acknowledge the head (#153).
+        head = await get_thread_close_state(db, root)
+        await _post(
+            client,
+            BOB,
+            subject="Re: Root",
+            parent_post_id=root,
+            extra_headers={
+                "X-Acknowledge-Soft-Close": f"{head.head_event_kind}:{head.head_event_id}"
+            },
+        )
         assert (await get_thread_close_state(db, root)).soft_closed is False
 
         await cast_vote(db, root, "alice@herd.ai")
