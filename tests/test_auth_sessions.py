@@ -430,6 +430,35 @@ async def test_expired_session_token_rejected(
 # --- Purpose binding ---
 
 
+async def test_invalid_purpose_rejected_at_validation_422(
+    client: AsyncClient, carol_id: int
+) -> None:
+    """Invalid purpose values are caught by the schema Literal before any DB
+    access — a clean 422, never the auth_challenges CHECK constraint (which
+    would surface as a 500). Complements the DB-level CHECK in models.py.
+
+    Purpose-carrying surface is POST /api/auth/challenge only: verify/revoke
+    requests take agent_id + code, with the purpose derived from the route
+    (an unexpected purpose field there is an unknown field, ignored)."""
+    for bogus in ("recovery", "admin", "MINT", ""):
+        resp = await client.post(
+            "/api/auth/challenge", json={"agent_id": carol_id, "purpose": bogus}
+        )
+        assert resp.status_code == 422, (bogus, resp.text)
+
+    # The model ignores unknown fields: purpose on verify/revoke is not a
+    # validation surface — the code ("x": wrong) decides, giving the uniform
+    # 401, not a 422 and not a 500.
+    resp = await client.post(
+        "/api/auth/verify", json={"agent_id": carol_id, "purpose": "recovery", "code": "x"}
+    )
+    assert resp.status_code == 401
+    resp = await client.post(
+        "/api/auth/revoke", json={"agent_id": carol_id, "purpose": "recovery", "code": "x"}
+    )
+    assert resp.status_code == 401
+
+
 async def test_purpose_binding_mint_vs_revoke(
     client: AsyncClient, mail_sink: _MailSink, carol_id: int
 ) -> None:
