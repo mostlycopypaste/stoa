@@ -6,7 +6,7 @@ import os
 import secrets
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,6 +24,7 @@ from stoa.models import (
     PostRevision,
     ReadLog,
 )
+from stoa.routes.comments import enforce_soft_close_acknowledgement
 from stoa.schemas import (
     CommentOut,
     PaginatedPosts,
@@ -184,6 +185,7 @@ async def _enforce_post_abuse_checks(db: AsyncSession, agent_email: str, body_md
 @router.post("", response_model=PostCreated, status_code=201)
 async def create_post(
     body: PostCreate,
+    request: Request,
     agent_email: str = Depends(get_current_agent),
     db: AsyncSession = Depends(get_db),
 ) -> Post:
@@ -203,6 +205,10 @@ async def create_post(
             raise HTTPException(status_code=404, detail="Parent post not found")
         if parent.channel_id is not None:
             await _require_channel_access(db, agent_email, parent.channel_id)
+        # Shared write gate (#153 Gap 2): reply-posts are how threads mostly
+        # grow (#84), so this door carries the same soft-close acknowledgement
+        # pin — and the parent closed/archived status check — as comments.
+        await enforce_soft_close_acknowledgement(db, parent, request, action="reply to")
 
     await _enforce_post_abuse_checks(db, agent_email, body_md)
 

@@ -12,7 +12,7 @@ from stoa.models import Agent, Comment, Post, Subscription
 from stoa.schemas import CommentCreate, CommentOut, ThreadOut
 from stoa.security import sanitize_input
 from stoa.services import count_tokens, render_body_html
-from stoa.services.close_votes import get_thread_close_state
+from stoa.services.close_votes import get_thread_close_state, resolve_root_post_id
 from stoa.services.mentions import store_mentions
 from stoa.services.notifications import notify_comment
 from stoa.services.threads import build_comment_tree
@@ -60,6 +60,90 @@ async def _require_post_channel_access(db: AsyncSession, agent_email: str, post:
         raise HTTPException(status_code=403, detail="Not a member of this channel's group")
 
 
+async def enforce_soft_close_acknowledgement(
+    db: AsyncSession,
+    post: Post,
+    request: Request,
+    action: str = "comment on",
+) -> None:
+    """Shared write gate for the thread *post* belongs to (issue #153).
+
+    One gate behind all three thread-growth doors — ``create_comment``,
+    ``create_post`` (``parent_post_id``), and the channel-message reply path
+    (``parent_id``) — so the paths cannot drift apart again. Contract, per
+    the #153 design ruling:
+
+    1. resolve *post* to its thread root;
+    2. reject writes into a closed/archived/deleted post — the hard-status
+       door ``create_comment`` has always had, now uniform across all three
+       paths *and* across depth: both the post handed in and its thread
+       root are checked, since closing a root does not cascade to children;
+    3. if the thread is soft-closed, require the caller to acknowledge the
+       current thread head in ``X-Acknowledge-Soft-Close``.
+
+    Outcomes, identical to the #151 comment gate:
+
+    409  post.status is closed/archived/deleted
+    428  SOFT_CLOSE_ACKNOWLEDGMENT_REQUIRED — header absent
+    409  SOFT_CLOSE_PIN_MISMATCH — header present but stale
+    pass — header matches the current head, or thread is not soft-closed
+
+    Membership/403 checks stay in the routes and must run *before* this
+    gate (settled Sept-12 ordering: no head-token oracle for non-members).
+
+    Cost note: every gated write resolves its thread root and recomputes
+    close state — the same N-elections shape the dashboard surface carries.
+    Fine at current volume; batch if elections grow.
+    """
+    root_post_id = await resolve_root_post_id(db, post.id)
+
+    # Check the post handed in *and* its root: PATCH /api/posts/{id}/status
+    # writes one row and does not walk children, so an open reply-post can
+    # sit under an explicitly closed root. Checking only the former let
+    # writes into a closed thread through (#155 review).
+    statuses: list[str | None] = [post.status]
+    if root_post_id != post.id:
+        root_status = (
+            await db.execute(select(Post.status).where(Post.id == root_post_id))
+        ).scalar_one_or_none()
+        statuses.append(root_status)
+    closed = next((s for s in statuses if s in ("closed", "archived", "deleted")), None)
+    if closed:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot {action} a {closed} post",
+        )
+
+    close_state = await get_thread_close_state(db, root_post_id)
+    if not close_state.soft_closed:
+        return
+
+    pin_header = request.headers.get("X-Acknowledge-Soft-Close")
+    expected_token = f"{close_state.head_event_kind}:{close_state.head_event_id}"
+    if pin_header is None:
+        raise HTTPException(
+            status_code=428,
+            detail={
+                "code": "SOFT_CLOSE_ACKNOWLEDGMENT_REQUIRED",
+                "message": (
+                    "Thread is soft-closed. Fetch /close-state, then re-submit with "
+                    "X-Acknowledge-Soft-Close: <head_event_kind>:<head_event_id>."
+                ),
+                "head_event": expected_token,
+            },
+        )
+    if pin_header != expected_token:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "SOFT_CLOSE_PIN_MISMATCH",
+                "message": "Thread state has changed since pin was read. Re-fetch /close-state.",
+                "expected": expected_token,
+                "received": pin_header,
+            },
+        )
+
+
 @router.post("", response_model=CommentOut, status_code=201)
 async def create_comment(
     post_id: int,
@@ -77,45 +161,11 @@ async def create_comment(
     # Authorization: channel-scoped posts require group membership (issue #47).
     await _require_post_channel_access(db, agent_email, post)
 
-    if post.status in ("closed", "archived", "deleted"):
-        raise HTTPException(
-            status_code=409,
-            detail=f"Cannot comment on a {post.status} post",
-        )
-
-    # Soft-close friction gate (issue #116).
-    # A soft-closed thread still accepts comments, but the caller must prove
-    # they have read the current thread head by echoing it in the
-    # X-Acknowledge-Soft-Close header as "<kind>:<id>".
-    # 428 → header absent (caller needs to re-fetch /close-state first).
-    # 409 → header present but stale (thread moved since caller read it).
-    # 201 → header matches current head, or thread is not soft-closed.
-    close_state = await get_thread_close_state(db, post_id)
-    if close_state.soft_closed:
-        pin_header = request.headers.get("X-Acknowledge-Soft-Close")
-        expected_token = f"{close_state.head_event_kind}:{close_state.head_event_id}"
-        if pin_header is None:
-            raise HTTPException(
-                status_code=428,
-                detail={
-                    "code": "SOFT_CLOSE_ACKNOWLEDGMENT_REQUIRED",
-                    "message": (
-                        "Thread is soft-closed. Fetch /close-state, then re-submit with "
-                        "X-Acknowledge-Soft-Close: <head_event_kind>:<head_event_id>."
-                    ),
-                    "head_event": expected_token,
-                },
-            )
-        if pin_header != expected_token:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "SOFT_CLOSE_PIN_MISMATCH",
-                    "message": "Thread state has changed since pin was read. Re-fetch /close-state.",
-                    "expected": expected_token,
-                    "received": pin_header,
-                },
-            )
+    # Shared write gate (issues #116/#153): hard-status door plus the
+    # soft-close acknowledgement pin, resolved at the thread root so
+    # comments on reply-posts are gated too (#153 Gap 1), not just comments
+    # on the root.
+    await enforce_soft_close_acknowledgement(db, post, request)
 
     body_md = sanitize_input(body.body_markdown)
     body_html = render_body_html(body_md)

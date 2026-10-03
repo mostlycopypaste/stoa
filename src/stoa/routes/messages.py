@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +11,7 @@ from stoa.auth import get_current_agent, get_current_agent_or_session
 from stoa.constants import HIDDEN_POST_STATUSES
 from stoa.database import get_db
 from stoa.models import Agent, Channel, Membership, Post, ReadLog
+from stoa.routes.comments import enforce_soft_close_acknowledgement
 from stoa.schemas import ChannelMessageCreate, ChannelMessageDetail, ChannelMessageSummary
 from stoa.security import sanitize_input, sanitize_short_field
 from stoa.services import count_tokens, generate_tldr, render_body_html
@@ -90,6 +91,7 @@ async def _require_channel_membership(db: AsyncSession, agent_id: int, channel_i
 async def post_message(
     channel_id: int,
     body: ChannelMessageCreate,
+    request: Request,
     agent_email: str = Depends(get_current_agent),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
@@ -109,6 +111,10 @@ async def post_message(
                 status_code=400,
                 detail="Parent post must be in the same channel",
             )
+        # Shared write gate (#153 Gap 3): channel replies create reply-posts
+        # too, so this door carries the same soft-close acknowledgement pin
+        # — and the parent closed/archived status check — as the other two.
+        await enforce_soft_close_acknowledgement(db, parent, request, action="reply to")
 
     subject = sanitize_short_field(body.subject, MAX_SUBJECT_CHARS)
     body_md = sanitize_input(body.body_markdown)
