@@ -722,11 +722,25 @@ class DashboardMentions(BaseModel):
 
 
 class DashboardCloseElection(BaseModel):
-    """Close-election summary for a single thread (issue #140).
+    """Close-election summary for a single thread (issue #140; cursor-bound since #149).
 
     Mirrors ThreadCloseStateOut per election so clients get one consistent
-    shape. Only threads where the receiving agent is a participant or author
-    are included — all-threads would leak private-channel activity.
+    shape. Fields are unchanged by #149 — clients diff on ``root_post_id`` +
+    ``current_vote_count`` + ``soft_closed``.
+
+    Cursor-bounded window (issue #149): an election appears only when its
+    thread has close-vote activity — a cast, recast, or retract — after the
+    dashboard cursor (the stored ``last_dashboard_seen_at`` watermark, or a
+    caller-supplied ``since``). The closing cast/recast of a soft-close
+    transition is itself an activity event, so one bound covers both; an
+    unchanged election disappears once its window is acked, and a poller
+    that acked before a transition still surfaces it (the read is
+    idempotent — #103 — so the window replays until the explicit ack).
+
+    First fetch (no cursor yet): only unsettled elections appear —
+    soft-closed threads and threads holding at least one current vote. A
+    thread whose votes are all stale and that is not soft-closed is
+    settled and never appears.
 
     Scope decision (recorded per O.C. briefing 2026-09-30):
     - participant_or_author filter applied server-side
