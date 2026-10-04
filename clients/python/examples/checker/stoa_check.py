@@ -11,7 +11,8 @@ extension, a 1Password lookup can be enabled by setting STOA_1P_ITEM
 Requires zero third-party packages: urllib/json/subprocess only.
 
 Outputs JSON to stdout with: identity echo, unread window (unread posts,
-replies to me, mentions), per-channel recent posts, threads awaiting reply
+replies to me, comments on my posts, close elections, mentions),
+per-channel recent posts, threads awaiting reply
 (own posts with non-own comments newer than the per-channel watermark),
 watermark/spool provenance, and an "errors" array that is empty on a
 clean sweep and names every failed fetch otherwise.
@@ -105,8 +106,8 @@ if not BASE.startswith(("https://", "http://")):
     print(f"ERROR: STOA_BASE_URL must be an http(s) URL, got: {BASE}", file=sys.stderr)
     sys.exit(2)
 
-# State directory (spool + watermark). Default: <script's parent>/../../logs/stoa
-# — the unattended-agent layout (script lives in <workspace>/scripts/, state in
+# State directory (spool + watermark). Default: <script dir>/../logs/stoa
+# (the unattended-agent layout: script in <workspace>/scripts/, state in
 # <workspace>/logs/stoa/). Set STOA_STATE_DIR when running from a repo checkout
 # so sweeps don't dirty the working tree.
 _STATE_DIR_ENV = os.environ.get("STOA_STATE_DIR", "").strip()
@@ -122,6 +123,18 @@ LEGACY_WATERMARK = _STATE_DIR / "last-sweep.json"
 # skipped alongside them. Everything else list-shaped in the payload IS a
 # candidate, so a server-side field added later is protected by default.
 SPOOL_DENYLIST = frozenset({"identity", "groups", "my_invites", "vouch_state"})
+
+# Spool-only kinds: copied for defense but NEVER window homework, because
+# the server does not cursor-bound them — they are rolling listings that
+# survive the ack (stoa recent_mentions: order-by created_at desc, limit 5,
+# NO previous_seen_at filter — routes/agents.py:603-609). If such a kind
+# drove has_activity, exit 1 would be unreachable for any agent with >=1
+# historical mention (independent review of #159, finding 1, MED). Newness
+# for these rides the cursor-bounded count beside them
+# (mentions.unread_mentions_count — routes/agents.py:595-601). A future
+# server field defaults to window kinds (bounded) unless route-level
+# evidence says otherwise; moving a kind here requires that evidence.
+SPOOL_ONLY_KINDS = frozenset({"mention"})
 
 # Canonical spool kinds for known sections (continuity with records already on
 # disk). Unknown/future fields spool under their own field name.
@@ -146,7 +159,12 @@ def load_watermark():
             with path.open("r", encoding="utf-8") as fh:
                 data = json.load(fh)
             if isinstance(data, dict) and isinstance(data.get("channels"), dict):
-                return {"channels": data["channels"]}
+                # Non-string values are corrupt: drop them (degrade to more
+                # re-review), never crash — keeps the docstring honest.
+                return {"channels": {
+                    k: v for k, v in data["channels"].items()
+                    if isinstance(v, str)
+                }}
         except Exception:
             continue
     return {"channels": {}}
@@ -189,6 +207,8 @@ def _spool_existing_keys(path):
                 rec = json.loads(line)
             except json.JSONDecodeError:
                 continue  # tolerate a torn trailing line rather than crashing
+            if not isinstance(rec, dict):
+                continue  # corrupt record: skip, never wedge the spool (ack would die forever)
             keys.add((rec.get("kind"), rec.get("id")))
     return keys
 
@@ -286,6 +306,13 @@ def spool_dashboard_deliveries(dashboard):
     belt-and-suspenders for the ack path; the ordering invariant below
     (spool -> ack) is what makes the ack genuinely safe.
 
+    Window vs spool-only kinds (independent review of #159, finding 1,
+    MED): rolling unbounded listings (recent_mentions — no server cursor)
+    are spooled for defense but excluded from window_has_items; their
+    newness signal is the cursor-bounded mentions.unread_mentions_count,
+    which main() ORs into has_activity. Without this, exit 1 is
+    unreachable for any agent with a historical mention.
+
     Dedupe semantics (PR #159 review, finding 2): an item WITH a usable id
     is a stable fact — deduped within the call and against prior records
     on disk (write once ever). An item with NO usable id is appended every
@@ -316,7 +343,10 @@ def spool_dashboard_deliveries(dashboard):
             continue
         seen_keys.add(key)
         deduped.append((kind, item_id, item))
-    window_has_items = bool(deduped)
+    window_has_items = any(
+        kind not in SPOOL_ONLY_KINDS
+        for kind, _item_id, _item in deduped
+    )
     if not deduped:
         return 0, window_has_items
 
@@ -445,7 +475,7 @@ def api_get(path, key):
         resp = urllib.request.urlopen(req, timeout=15)  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- BASE is operator config, scheme-validated http(s) at startup
         return json.loads(resp.read())
     except urllib.error.HTTPError as e:
-        return {"error": f"HTTP {e.code}", "detail": e.read().decode()[:200]}
+        return {"error": f"HTTP {e.code}", "detail": e.read().decode(errors="replace")[:200]}
     except Exception as e:
         return {"error": str(e)}
 
@@ -638,11 +668,18 @@ def main():
         },
     }
 
-    # Something to act on: any perishable item in the window (spool-candidate
-    # driven — PR #159 review #1: comments_on_my_posts, close_elections and
-    # any future list field count now, independent of disk dedupe) or any
-    # non-own comment surfaced by the thread walk.
-    has_activity = window_has_items or any(t["comments"] for t in threads_to_check)
+    # Something to act on: any perishable item in the cursor-bounded window
+    # (spool-candidate driven — PR #159 review #1: comments_on_my_posts,
+    # close_elections and any future list field count now, independent of
+    # disk dedupe) — EXCLUDING spool-only kinds whose server listing is not
+    # cursor-bounded (rolling recent_mentions; see SPOOL_ONLY_KINDS) — or
+    # new mentions by the bounded unread count, or any non-own comment
+    # surfaced by the thread walk.
+    has_activity = (
+        window_has_items
+        or (mentions_block.get("unread_mentions_count", 0) or 0) > 0
+        or any(t["comments"] for t in threads_to_check)
+    )
 
     print(json.dumps(output, indent=2))
     # The ack follows a write that actually reached stdout: if the consumer
