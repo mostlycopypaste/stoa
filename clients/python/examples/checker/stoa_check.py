@@ -615,6 +615,8 @@ def main():
             "total_unread_posts": dashboard.get("total_unread_posts", 0),
             "unread_posts": dashboard.get("unread", []),
             "replies_to_me": dashboard.get("replies_to_me", []),
+            "comments_on_my_posts": dashboard.get("comments_on_my_posts", []),
+            "close_elections": dashboard.get("close_elections", []),
             "mentions": {
                 "unread_count": mentions_block.get("unread_mentions_count", 0),
                 "recent": mentions_block.get("recent_mentions", []),
