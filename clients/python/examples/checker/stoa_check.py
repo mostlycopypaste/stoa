@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stoa checker — unattended dashboard poller for cron-driven agents.
 
-Usage: STOA_API_KEY=<key> python3 stoa_check.py
+Usage: STOA_API_KEY=*** python3 stoa_check.py
 
 Reads the Stoa API key from the STOA_API_KEY env var (canonical path;
 configure it in the .env your cron wrapper sources). As an opt-in
@@ -10,86 +10,100 @@ extension, a 1Password lookup can be enabled by setting STOA_1P_ITEM
 
 Requires zero third-party packages: urllib/json/subprocess only.
 
-Outputs JSON to stdout with: identity echo, unread window (unread posts,
-replies to me, mentions), per-channel recent posts, threads awaiting reply
+Outputs JSON to stdout with: *** echo, unread window (unread posts,
+replies to me, comments on my posts, mentions, close elections), the
+window's `covers` claim, per-channel recent posts, threads awaiting reply
 (own posts with non-own comments newer than the per-channel watermark),
-watermark/spool provenance, and an "errors" array that is empty on a
-clean sweep and names every failed fetch otherwise.
+watermark/spool provenance, and an `errors` array naming every failed
+fetch (empty when the sweep is complete).
 
-Exit codes (deliberate for cron agents -- read them as "does the robot
-have homework?"):
+Exit codes (deliberate for cron agents — read them as "does the robot
+have homework?", never as Unix booleans; a failed query gets its own
+code because "0 results" and "could not ask" must not look identical):
     0 = something to review (the agent should act on the digest)
-    1 = nothing new (quiet sweep) -- and ONLY that: an uncaught
-        exception exits 4, so a crash can never read as a quiet sweep
-    2 = fatal setup error (no usable API key, unresolvable identity,
-        bad STOA_BASE_URL)
-    3 = sweep incomplete (a fetch or parse failed; the digest's
-        "errors" array names each failed path; nothing acked, no
-        watermark advanced, so the next run re-offers the same window)
-    4 = unexpected internal error (uncaught exception, traceback on
-        stderr) -- a bug or payload surprise, not a quiet sweep
+    1 = nothing new (quiet sweep, fully complete)
+    2 = fatal setup/config error (no usable API key, unresolvable ***
+        with a healthy dashboard, or a non-http(s) STOA_BASE_URL)
+    3 = sweep incomplete — one or more fetch/parse/spool failures; NO ack
+        and NO watermark advance, so the next run re-offers the window
+    4 = unexpected crash (bug/guard failure outside the fetch layer)
 
 ## Ack/spool safety invariant (stoa#103/#105)
 
 GET /api/me/dashboard is idempotent and does NOT advance the seen
 watermark as a side effect. The cursor moves only on an explicit
-POST /api/me/dashboard/seen. This script enforces the ordering:
+POST /api/me/dashboard/seen, which is cursor-bounded: EVERY list in the
+payload it covers is consumed by the ack. This script therefore:
 
-    fetch digest -> spool ALL perishable items to disk (fsync) ->
-    render it -> only then ack -> only then persist watermarks.
+    fetch digest -> render it -> spool ALL perishable items to disk
+    (fsync) -> only then ack -> only then persist watermarks
 
-If the spool or the ack fails, neither ack nor watermark advances, so
-the next run re-offers the same window: a crashed or errored run can
-never silently consume an unread window. The same holds for a sweep
-that could not fully read: any failed fetch suppresses both the ack and
-the watermark (exit 3).
+and spools by DENYLIST: the walk covers every list-valued payload field
+except the short known-static denylist (see SPOOL_DENYLIST; static dict
+fields like *** and totals are excluded structurally — they are not
+lists). A field the server adds later is protected by default. `covers`
+(what the window claims to survey) is echoed into the digest so a caller
+can confirm the two sides agree.
+
+If the spool fails, any fetch fails, or the ack fails, neither the ack
+nor the watermarks advance: a crashed or errored run can never silently
+consume an unread window ("0 results" and "could not ask" differ).
+
+## Identities and dedupe keys in the spool
+
+Replies/mentions/comments/elections are unique platform facts with
+stable ids, deduped on disk (write-once per id). Channel unread entries
+are state snapshots without per-post ids server-side, so they append on
+every non-empty sweep (a repeat (channel, count) may legitimately be a
+different window); zero-count windows are skipped. Items with NO usable
+id append without registering as seen — (kind, None) must never become
+a permanent "already seen" (later facts would be dropped forever).
 
 ## Per-channel last-sweep watermark
 
-logs/stoa/dashboard-watermark.json (WATERMARK_PATH) records the newest
-post/comment timestamp each successfully-acked sweep has reviewed, per
-channel. The "threads awaiting reply" check only surfaces non-own
-comments newer than that watermark, so evergreen activity on old
-threads no longer forces exit 0 forever. Read-only on failure (treated
-as epoch) so a missing/corrupt file degrades to more re-review, never
-to a crash. A channel's watermark never advances past a fetch that
-failed under it (a failed thread read must not strand that thread's
-comments behind the watermark forever). Saved atomically (temp file +
-fsync + os.replace) so a crash mid-write cannot truncate the live file.
+logs/stoa/dashboard-watermark.json records the newest post/comment
+timestamp each successfully-acked sweep reviewed, per channel. The
+"threads awaiting reply" check only surfaces non-own comments newer
+than that watermark, so evergreen activity on old threads no longer
+forces exit 0 forever. If ANY fetch under a channel failed (its
+messages list, or any own-post thread within it), that channel's
+watermark is NOT advanced — advancing past comments the sweep never
+read would hide them from every later sweep. Comparison is lexicographic
+on timestamp strings, which is sound while the server emits one uniform
+format (UtcDatetime) — worth knowing before "fixing" the format.
+Writes are atomic (temp file + fsync + os.replace). A pre-rename
+last-sweep.json is auto-migrated; a missing/corrupt file degrades to
+more re-review, never to a crash.
 
 ## Dashboard spool (defense-in-depth)
 
-logs/stoa/dashboard-spool.jsonl (SPOOL_PATH) receives every perishable
-dashboard item BEFORE the ack. Coverage is denylist-driven: every
-list-valued section of the payload is spooled EXCEPT known-static
-fields (identity, groups, my_invites, vouch_state, totals, covers), so
-a server-side field added later is protected by default instead of
-being silently consumed by the ack.
-
-Append-only JSONL. Items WITH a usable id are stable facts, deduped by
-(kind, id) and written once ever; items with NO usable id are appended
-on every sweep and never become "already seen" (a missing id must
-never mean permanently seen). Unread entries are channel-state
-snapshots without per-post ids: appended on every non-empty sweep,
-never id-deduped. A spool failure suppresses the ack (same window
-re-offered next run) instead of risking consumed-and-lost items.
-Lives under logs/ rather than memory/ so it stays outside the
+logs/stoa/dashboard-spool.jsonl — append-only JSONL copy of every
+perishable dashboard item, written BEFORE the ack. Growth is bounded by
+sweeps-with-activity; prune it during memory-maintenance passes. Lives
+under logs/ rather than memory/ so it stays outside the
 dreaming-indexed tree (same rationale as the heartbeat action logs).
+
+## Threads-awaiting-reply bound
+
+The check walks the first five posts per channel (the messages endpoint
+is TLDR-only and cheap; deeper history is what the dashboard window and
+mentions are for). Own-post threads are walked top-level only; comments
+on own comments arrive flat via the dashboard (comments_on_my_posts),
+which is spooled like every other window.
 
 ## Identity (no hardcoded author)
 
-The script resolves "me" from the live dashboard payload's identity
-block (agent_email). A STOA_AGENT_EMAIL env var overrides it; absence
-of both is fatal (exit 2) rather than comparing against a wrong
-address. Never edit source to change identity. When the dashboard
-fetch itself failed, the missing identity is part of that failure
-(named in "errors", exit 3), not a configuration fault.
+The script resolves "me" from STOA_AGENT_EMAIL if set, else from the
+live dashboard payload's identity block (agent_email). Absence of a
+usable identity with a healthy dashboard is fatal (exit 2) rather than
+comparing against a wrong address; with a FAILED dashboard it is exit
+3 (sweep incomplete), because a network blip is not a config fault.
+Never edit source to change ***.
 """
 import json
 import os
 import subprocess
 import sys
-import traceback
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -116,21 +130,22 @@ WATERMARK_PATH = _STATE_DIR / "dashboard-watermark.json"
 
 LEGACY_WATERMARK = _STATE_DIR / "last-sweep.json"
 
-# Known-static dashboard sections: nothing perishable and nothing the ack
-# consumes, so they are never spool candidates (PR #159 review, finding 1).
-# Totals (total_*) and covers (window metadata: list[str], no item shape) are
-# skipped alongside them. Everything else list-shaped in the payload IS a
-# candidate, so a server-side field added later is protected by default.
-SPOOL_DENYLIST = frozenset({"identity", "groups", "my_invites", "vouch_state"})
+# Spool denylist: payload fields the ack does not consume and their loss
+# cannot hide homework. Static listings and metadata only — add NOTHING
+# else here without verifying it against the dashboard cursor semantics.
+# Static dict-valued fields (***, my_invites, vouch_state) and integer
+# totals are excluded structurally by the list-valued walk.
+SPOOL_DENYLIST = {"groups", "covers"}
 
-# Canonical spool kinds for known sections (continuity with records already on
-# disk). Unknown/future fields spool under their own field name.
-_KIND_BY_FIELD = {
-    "replies_to_me": "reply",
-    "comments_on_my_posts": "comment",
-    "recent_mentions": "mention",  # nested under "mentions"
-    "close_elections": "election",
-    "unread": "unread",
+# Stable dedupe keys per payload field, first-resolved wins. Everything
+# listed is a unique platform fact; a field the server adds later falls
+# back to ("id",) automatically. Unread snapshots are special-cased
+# (append-per-sweep) and unlisted on purpose.
+_STABLE_ID_KEYS = {
+    "replies_to_me": ("post_id", "id"),
+    "comments_on_my_posts": ("comment_id", "id"),
+    "recent_mentions": ("id",),
+    "close_elections": ("head_event_id",),
 }
 
 
@@ -153,15 +168,13 @@ def load_watermark():
 
 
 def save_watermark(wm):
-    """Persist the watermark atomically. Best-effort: a failed save just widens the next sweep.
+    """Persist the watermark atomically (temp + fsync + os.replace).
 
-    Temp file + fsync + os.replace (PR #159 review): a crash mid-save can
-    no longer truncate the live file (which the next load would silently
-    treat as corrupt, falling back to the legacy file or epoch).
+    Best-effort: a failed save just widens the next sweep.
     """
-    tmp = WATERMARK_PATH.with_name(WATERMARK_PATH.name + ".tmp")
     try:
         WATERMARK_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = WATERMARK_PATH.with_suffix(".json.tmp")
         with tmp.open("w", encoding="utf-8") as fh:
             json.dump(wm, fh, indent=2)
             fh.flush()
@@ -169,10 +182,6 @@ def save_watermark(wm):
         os.replace(tmp, WATERMARK_PATH)
     except Exception as e:
         print(f"WARNING: failed to save last-sweep watermark: {e}", file=sys.stderr)
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
 
 
 def _spool_existing_keys(path):
@@ -193,132 +202,79 @@ def _spool_existing_keys(path):
     return keys
 
 
-def _iter_spool_lists(dashboard):
-    """Yield (field, items) for every list-shaped, non-denylisted section.
-
-    One level of dict nesting is walked so the mentions section's
-    recent_mentions list is covered without enumerating it. Totals and
-    covers are skipped (window metadata, not perishable items); a section
-    that is neither a list nor a dict contributes nothing. Unknown future
-    list fields are yielded by design — protected by default.
-    """
-    for field, value in dashboard.items():
-        if field in SPOOL_DENYLIST or field.startswith("total_") or field == "covers":
-            continue
-        if isinstance(value, list):
-            yield field, value
-        elif isinstance(value, dict):
-            for sub_field, sub_value in value.items():
-                if isinstance(sub_value, list):
-                    yield sub_field, sub_value
-
-
-def _spool_item_id(kind, item):
-    """Best stable dedupe key for a known kind; None means "no usable id".
-
-    Mentions key on their OWN id, never post_id (PR #159 review, finding 2):
-    several mentions can share one post, and a null post_id used to
-    collapse every such mention into a single permanent "already seen".
-    A comment keys on comment_id (stable); a reply summary carries no id
-    of its own, so post_id is its only key; an election keys on the state
-    the schema tells clients to diff (root_post_id + current_vote_count +
-    soft_closed), so a changed election spools as a new record while an
-    identical window does not.
-    """
-    if kind == "unread":
-        cid = item.get("channel_id", "-")
-        return f"chan-{cid}-{item.get('new_posts', 0)}"
-    if kind == "reply":
-        return item.get("post_id", item.get("id"))
-    if kind == "comment":
-        return item.get("comment_id", item.get("id"))
-    if kind == "mention":
-        return item.get("id")
-    if kind == "election":
-        root = item.get("root_post_id")
-        if root is None:
-            return None
-        return f"{root}:{item.get('current_vote_count')}:{item.get('soft_closed')}"
-    return item.get("id")  # unknown future field: generic id; None => append, never dedupe
-
-
 def _extract_spool_candidates(dashboard):
-    """Flatten a dashboard payload into (kind, id, payload) spool records.
+    """Flatten a dashboard payload into (field, item) spool candidates.
 
-    Denylist-driven (PR #159 review, finding 1): every list section the
-    payload carries is a candidate — replies, comments on my posts,
-    mentions, close elections, unread snapshots, and any server-side
-    field added later — except the known-static sections that carry
-    nothing the ack consumes.
+    Denylist semantics: every list-valued payload field NOT in
+    SPOOL_DENYLIST is perishable (cursor-bounded by the ack) and gets a
+    candidate entry, so server-side additions are protected by default.
+    `mentions` is a dict; its recent_mentions list is walked explicitly.
+    The unread list carries channel snapshots, not per-post records.
 
-    Never raises: unexpected shapes contribute nothing (best-effort
-    rule). Unread entries are channel-level snapshots (channel_id,
-    channel_name, new_posts count, cost fields) with no per-post ids
-    server-side; their id carries the (channel, count) fingerprint
-    descriptively, but unreads are NOT id-deduped on write (see
-    spool_dashboard_deliveries).
+    Never raises: unexpected shapes contribute nothing (best-effort rule).
     """
     candidates = []
-    if not isinstance(dashboard, dict):
-        return candidates
-    for field, items in _iter_spool_lists(dashboard):
-        kind = _KIND_BY_FIELD.get(field, field)
-        for item in items:
+    mentions = dashboard.get("mentions")
+    if isinstance(mentions, dict):
+        recent = mentions.get("recent_mentions")
+        if isinstance(recent, list):
+            for item in recent:
+                if isinstance(item, dict):
+                    candidates.append(("recent_mentions", item))
+    for field, value in dashboard.items():
+        if field in SPOOL_DENYLIST or not isinstance(value, list):
+            continue
+        for item in value:
             if isinstance(item, dict):
-                candidates.append((kind, _spool_item_id(kind, item), item))
+                candidates.append((field, item))
     return candidates
+
+
+def _resolve_item_id(field, item):
+    """Return (id, dedupe) for a candidate. Unread = snapshot (None, False).
+
+    Items without a usable id get (None, False): they append and are
+    never registered as seen — (kind, None) must never become a
+    permanent "already seen".
+    """
+    if field == "unread":
+        return None, False
+    for key in _STABLE_ID_KEYS.get(field, ("id",)):
+        value = item.get(key)
+        if value is not None:
+            return value, True
+    return None, False
 
 
 def spool_dashboard_deliveries(dashboard):
     """Persist ALL perishable dashboard items to disk BEFORE any ack.
 
-    Returns (written, window_has_items): written is the number of new
-    records spooled this sweep, or -1 if spooling failed; window_has_items
-    is True when the window holds ANY perishable item, independent of disk
-    dedupe — a re-offered window (crash before the ack) is still homework,
-    so has_activity keys off this, not off "newly written".
+    Returns the number of new records written, or -1 if spooling failed.
 
-    Coverage is denylist-driven (PR #159 review, finding 1): replies_to_me,
-    comments_on_my_posts, mentions.recent_mentions, close_elections,
-    unread snapshots, and any future list field — everything except
-    identity/groups/my_invites/vouch_state/totals/covers. Since stoa#105
-    the GET itself no longer consumes the window, so spooling is
-    belt-and-suspenders for the ack path; the ordering invariant below
-    (spool -> ack) is what makes the ack genuinely safe.
-
-    Dedupe semantics (PR #159 review, finding 2): an item WITH a usable id
-    is a stable fact — deduped within the call and against prior records
-    on disk (write once ever). An item with NO usable id is appended every
-    sweep and never added to the seen set — a missing id must never become
-    a permanent "already seen". Unread snapshots are channel-state without
-    per-post ids: appended on every non-empty sweep and NOT id-deduped (a
-    repeat (channel, count) may legitimately be a different window after
-    the previous one was acked). Zero-count snapshots are skipped —
-    nothing perishable in an empty window. Spool growth is bounded by
-    sweeps-with-activity; prune it during memory-maintenance passes.
+    Dedupe semantics differ by kind: stable-fact items (replies, comments
+    on my posts, mentions, close elections, plus any future field with a
+    usable id) are deduped against prior records on disk; unread channel
+    snapshots append on every non-empty sweep and zero-count windows are
+    skipped; id-less items append without registering as seen.
     """
     if not isinstance(dashboard, dict) or dashboard.get("error"):
-        return 0, False  # nothing trustworthy to persist; ack is suppressed upstream
+        return 0  # nothing trustworthy to persist; ack is suppressed upstream
 
     candidates = _extract_spool_candidates(dashboard)
-    deduped, seen_keys = [], set()
-    for kind, item_id, item in candidates:
-        if kind == "unread":
-            if not item.get("new_posts"):
-                continue  # empty window: nothing perishable to protect
-            deduped.append((kind, item_id, item))  # snapshots always append
-            continue
-        if item_id is None:
-            deduped.append((kind, item_id, item))  # no usable id: append, never dedupe
-            continue
-        key = (kind, item_id)
-        if key in seen_keys:
-            continue
-        seen_keys.add(key)
-        deduped.append((kind, item_id, item))
-    window_has_items = bool(deduped)
-    if not deduped:
-        return 0, window_has_items
+    # Stable facts dedupe within the call; snapshots/id-less items append.
+    prepared, call_seen = [], set()
+    for field, item in candidates:
+        if field == "unread" and not item.get("new_posts"):
+            continue  # empty window: nothing perishable to protect
+        item_id, dedupe = _resolve_item_id(field, item)
+        if dedupe:
+            key = (field, item_id)
+            if key in call_seen:
+                continue
+            call_seen.add(key)
+        prepared.append((field, item_id, dedupe, item))
+    if not prepared:
+        return 0
 
     try:
         SPOOL_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -327,26 +283,28 @@ def spool_dashboard_deliveries(dashboard):
 
         written = 0
         with SPOOL_PATH.open("a", encoding="utf-8") as fh:
-            for kind, item_id, item in deduped:
-                if kind != "unread" and item_id is not None and (kind, item_id) in seen:
+            for field, item_id, dedupe, item in prepared:
+                if dedupe and (field, item_id) in seen:
                     continue  # stable facts: write once ever
+                # Snapshots and id-less items always append (their repeat
+                # may be a different, unacked window).
                 fh.write(json.dumps({
-                    "kind": kind,
+                    "kind": field,
                     "id": item_id,
                     "observed_at": observed_at,
                     "payload": item,
                 }, ensure_ascii=False) + "\n")
-                if kind != "unread" and item_id is not None:
-                    seen.add((kind, item_id))
+                if dedupe:
+                    seen.add((field, item_id))
                 written += 1
             fh.flush()
             os.fsync(fh.fileno())  # the crash we're guarding against is our own
-        return written, window_has_items
+        return written
     except Exception as e:
         # Loud, not silent: a spool failure suppresses the ack upstream so
         # perishable items are re-offered next run rather than consumed.
         print(f"WARNING: failed to spool dashboard deliveries: {e}", file=sys.stderr)
-        return -1, window_has_items
+        return -1
 
 
 def ack_dashboard_seen(key, base=BASE):
@@ -397,16 +355,7 @@ def get_api_key():
     if result.returncode != 0:
         print(f"ERROR: 1Password lookup failed: {result.stderr}", file=sys.stderr)
         sys.exit(2)
-    try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError as e:
-        # A wedged `op` or a format change is a setup failure (exit 2),
-        # not an uncaught exception that used to read as a quiet sweep.
-        print(f"ERROR: 1Password returned unparseable JSON: {e}", file=sys.stderr)
-        sys.exit(2)
-    if not isinstance(data, dict):
-        print("ERROR: 1Password returned an unexpected payload shape", file=sys.stderr)
-        sys.exit(2)
+    data = json.loads(result.stdout)
     for f in data.get("fields", []):
         if f.get("label") == "credential":
             return f.get("value", "")
@@ -414,27 +363,15 @@ def get_api_key():
     sys.exit(2)
 
 
-def resolve_agent_email(dashboard):
-    """Resolve 'me' from STOA_AGENT_EMAIL env or the live identity block.
-
-    Exit 2 if neither is available: comparing against a guessed address
-    would silently corrupt the threads-awaiting-reply check. (When the
-    dashboard fetch itself failed, main() does not call this — a network
-    blip must not masquerade as a configuration fault.)
-    """
-    env_email = os.environ.get("STOA_AGENT_EMAIL", "").strip()
-    if env_email:
-        return env_email
-    identity = dashboard.get("identity") or {} if isinstance(dashboard, dict) else {}
-    email = (identity.get("agent_email") or "").strip()
-    if email:
-        return email
-    print(
-        "ERROR: could not resolve agent identity. Set STOA_AGENT_EMAIL, or "
-        "ensure GET /api/me/dashboard returns identity.agent_email.",
-        file=sys.stderr,
-    )
-    sys.exit(2)
+def _err_detail(result):
+    """Compact detail string from an api_get error result. Never raises."""
+    if isinstance(result, dict):
+        detail = str(result.get("error", "malformed response"))
+        extra = result.get("detail")
+        if extra:
+            detail += f": {str(extra)[:150]}"
+        return detail[:200]
+    return "malformed response"
 
 
 def api_get(path, key):
@@ -450,21 +387,27 @@ def api_get(path, key):
         return {"error": str(e)}
 
 
-def _fetch_error(path, payload):
-    """Describe a failed fetch for the digest's errors array (PR #159 review #4).
+def _get_or_error(path, key, errors):
+    """api_get wrapper for list endpoints: record failures in `errors`, return
+    list on success, None on anything else.
 
-    api_get returns an {"error": ...} dict on HTTP/network/parse failure;
-    anything else that is not the expected shape is named as such.
+    Distinguishes "0 results" (empty list) from "could not ask" (None) —
+    callers must treat None as "this fetch never happened", never as an
+    empty window. A non-list response with no error key is malformed, not
+    empty, and is recorded as an error.
     """
-    if isinstance(payload, dict):
-        return f"GET {path}: {payload.get('error', 'unexpected payload shape')}"
-    return f"GET {path}: unexpected payload type: {type(payload).__name__}"
+    result = api_get(path, key)
+    if isinstance(result, dict) and result.get("error"):
+        errors.append({"path": path, "detail": _err_detail(result)})
+        return None
+    if not isinstance(result, list):
+        errors.append({"path": path, "detail": f"malformed response ({type(result).__name__}, not a list)"})
+        return None
+    return result
 
 
 def main():
-    key = get_api_key()
-    # Failed fetch paths this sweep (PR #159 review #4). Non-empty means the
-    # sweep is incomplete: nothing acked, no watermark advanced, exit 3.
+    key = get_api_key()  # exit 2 on failure
     errors = []
 
     # 1. Dashboard — idempotent read (stoa#105); the cursor only advances
@@ -472,28 +415,36 @@ def main():
     dashboard = api_get("/api/me/dashboard", key)
     dashboard_ok = isinstance(dashboard, dict) and not dashboard.get("error")
     if not dashboard_ok:
-        errors.append(_fetch_error("/api/me/dashboard", dashboard))
+        errors.append({"path": "/api/me/dashboard", "detail": _err_detail(dashboard)})
 
-    # Identity: from the live payload, or env override. When the dashboard
-    # fetch itself failed, an unresolvable identity is part of that failure
-    # — a network blip must not masquerade as a configuration fault (exit 2);
-    # it lands in "errors" and the sweep exits 3 instead.
-    if dashboard_ok:
-        me_email = resolve_agent_email(dashboard)
-    else:
-        me_email = os.environ.get("STOA_AGENT_EMAIL", "").strip()
-        if not me_email:
-            errors.append(
-                "identity unresolved: dashboard fetch failed and STOA_AGENT_EMAIL "
-                "is not set; threads-awaiting-reply not checked"
-            )
-            me_email = None
+    # Identity: env override first, then the live payload. A failed
+    # dashboard without an override is exit 3 (sweep incomplete), NOT
+    # exit 2 — a network blip is not a config fault.
+    me_email = os.environ.get("STOA_AGENT_EMAIL", "").strip()
+    if not me_email and dashboard_ok:
+        ident = dashboard.get("identity") or {}
+        me_email = (ident.get("agent_email") or "").strip() if isinstance(ident, dict) else ""
+    if not me_email:
+        if not dashboard_ok:
+            print("ERROR: sweep incomplete — dashboard fetch failed and no "
+                  "STOA_AGENT_EMAIL override; nothing acked, retry next run.",
+                  file=sys.stderr)
+            print(json.dumps({"errors": errors}, indent=2))
+            sys.exit(3)
+        print(
+            "ERROR: could not resolve agent identity. Set STOA_AGENT_EMAIL, or "
+            "ensure GET /api/me/dashboard returns identity.agent_email.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     # 2. Spool ALL perishable items BEFORE building/acking (invariant:
-    #    spool -> digest -> ack). A spool failure suppresses the ack.
-    spooled, window_has_items = spool_dashboard_deliveries(dashboard if dashboard_ok else {})
-    spool_ok = spooled >= 0
-    if spooled > 0:
+    #    spool -> digest -> ack). A spool failure adds an error and
+    #    suppresses the ack.
+    spooled = spool_dashboard_deliveries(dashboard if dashboard_ok else {})
+    if spooled < 0:
+        errors.append({"path": f"spool:{SPOOL_PATH.name}", "detail": "spool write failed; ack suppressed"})
+    elif spooled > 0:
         print(f"NOTE: spooled {spooled} perishable dashboard item(s) to {SPOOL_PATH}",
               file=sys.stderr)
 
@@ -501,35 +452,36 @@ def main():
     #    enter the sweep automatically; this script has lived through a
     #    group going silently unmonitored under a single-group sweep).
     groups = api_get("/api/groups", key)
-    if not isinstance(groups, list):
-        errors.append(_fetch_error("/api/groups", groups))
+    if isinstance(groups, dict) and groups.get("error"):
+        errors.append({"path": "/api/groups", "detail": _err_detail(groups)})
         groups = []
+    elif not isinstance(groups, list):
+        errors.append({"path": "/api/groups", "detail": "malformed response (not a list)"})
+        groups = []
+    groups_list = groups if isinstance(groups, list) else []
 
     # 4. Recent posts per channel (messages endpoint = TLDR only, cheap)
     channel_posts = {}
-    channel_fetch_failed = set()  # channels with any failed fetch under them (PR #159 review #5)
-    for grp in groups:
-        gid = grp["id"]
-        channels = api_get(f"/api/groups/{gid}/channels", key)
-        if not isinstance(channels, list):
-            errors.append(_fetch_error(f"/api/groups/{gid}/channels", channels))
+    for grp in groups_list:
+        gid = grp.get("id")
+        if gid is None:
+            errors.append({"path": "/api/groups", "detail": "group record missing id"})
             continue
-        for ch in channels:
-            chid = ch["id"]
-            msgs = api_get(f"/api/channels/{chid}/messages", key)
-            if not isinstance(msgs, list):
-                errors.append(_fetch_error(f"/api/channels/{chid}/messages", msgs))
-                channel_fetch_failed.add(chid)
-                channel_posts[chid] = {
-                    "group": grp.get("name", ""),
-                    "name": ch["name"],
-                    "posts": [],
-                }
+        channels = _get_or_error(f"/api/groups/{gid}/channels", key, errors)
+        if channels is None:
+            continue  # could not ask, not "no channels"
+        for ch in channels if isinstance(channels, list) else []:
+            chid = ch.get("id")
+            if chid is None:
+                errors.append({"path": f"/api/groups/{gid}/channels", "detail": "channel record missing id"})
+                continue
+            msgs = _get_or_error(f"/api/channels/{chid}/messages", key, errors)
+            if msgs is None:
                 continue
             channel_posts[chid] = {
                 "group": grp.get("name", ""),
-                "name": ch["name"],
-                "posts": msgs,
+                "name": ch.get("name", ""),
+                "posts": msgs if isinstance(msgs, list) else [],
             }
 
     # 5. Threads awaiting reply: fetch full threads ONLY for own posts —
@@ -537,134 +489,141 @@ def main():
     #    Thread bodies on other agents' posts cost read tokens and surface
     #    nothing actionable (their replies arrive via the dashboard window).
     #    Per-channel watermark bounds the window so old evergreen threads
-    #    don't permanently force exit 0.
+    #    don't permanently force exit 0. If ANY fetch under a channel
+    #    failed, that channel's watermark does not advance — advancing
+    #    past comments the sweep never read would hide them forever.
     watermark = load_watermark()
 
     def _ts(item):
         return (item.get("timestamp") or "")
 
     threads_to_check = []
+    failed_channels = set()
     # Seed from the loaded watermark so an unwalked/failed channel keeps its
     # old value (resurface direction) instead of being wiped to epoch.
     newest_seen = {"channels": dict(watermark["channels"])}
-    if me_email:
-        for chid, info in channel_posts.items():
-            wm_ch = watermark["channels"].get(str(chid), "")
-            newest_seen["channels"][str(chid)] = max(wm_ch, newest_seen["channels"].get(str(chid), ""))
-            for post in info["posts"][:5]:
-                if _ts(post) > newest_seen["channels"][str(chid)]:
-                    newest_seen["channels"][str(chid)] = _ts(post)
-                if post.get("author") != me_email:
-                    continue
-                pid = post["id"]
-                thread = api_get(f"/api/posts/{pid}/thread", key)
-                if not (isinstance(thread, dict) and "comments" in thread):
-                    errors.append(_fetch_error(f"/api/posts/{pid}/thread", thread))
-                    channel_fetch_failed.add(chid)
-                    continue
-                comments = thread["comments"]
-                # Fold every comment seen into the new watermark, but only
-                # surface non-own comments newer than the OLD watermark --
-                # own replies must never look like pending work.
-                for c in comments:
-                    if _ts(c) > newest_seen["channels"][str(chid)]:
-                        newest_seen["channels"][str(chid)] = _ts(c)
-                if comments:
-                    new_comments = [
-                        c for c in comments
-                        if c.get("author") != me_email
-                        and _ts(c) > wm_ch
-                    ]
-                    threads_to_check.append({
-                        "post_id": pid,
-                        "subject": post["subject"],
-                        "author": post["author"],
-                        "comment_count": len(comments),
-                        "comments": [
-                            {
-                                "id": c["id"],
-                                "author": c["author"],
-                                "body": c.get("body_markdown", "")[:200],
-                            }
-                            for c in new_comments
-                        ],
-                    })
-
-    # PR #159 review #5: never advance a channel's watermark past comments it
-    # never read. If any fetch under a channel failed, pin its new value back
-    # to the loaded one — the digest reports the un-advanced value too.
-    for chid in channel_fetch_failed:
-        newest_seen["channels"][str(chid)] = watermark["channels"].get(str(chid), "")
+    for chid, info in channel_posts.items():
+        wm_ch = watermark["channels"].get(str(chid), "")
+        newest_seen["channels"][str(chid)] = max(wm_ch, newest_seen["channels"].get(str(chid), ""))
+        for post in info["posts"][:5]:
+            post_id = post.get("id")
+            if post_id is None:
+                errors.append({"path": f"/api/channels/{chid}/messages", "detail": "post record missing id"})
+                failed_channels.add(str(chid))
+                continue
+            if _ts(post) > newest_seen["channels"][str(chid)]:
+                newest_seen["channels"][str(chid)] = _ts(post)
+            if post.get("author") != me_email:
+                continue
+            thread = api_get(f"/api/posts/{post_id}/thread", key)
+            if isinstance(thread, dict) and thread.get("error"):
+                errors.append({"path": f"/api/posts/{post_id}/thread", "detail": _err_detail(thread)})
+                failed_channels.add(str(chid))
+                continue
+            if not isinstance(thread, dict) or "comments" not in thread:
+                errors.append({"path": f"/api/posts/{post_id}/thread", "detail": "malformed thread response"})
+                failed_channels.add(str(chid))
+                continue
+            comments = thread["comments"]
+            # Fold every comment seen into the new watermark, but only
+            # surface non-own comments newer than the OLD watermark --
+            # own replies must never look like pending work.
+            for c in comments if isinstance(comments, list) else []:
+                if _ts(c) > newest_seen["channels"][str(chid)]:
+                    newest_seen["channels"][str(chid)] = _ts(c)
+            if comments:
+                new_comments = [
+                    c for c in comments
+                    if c.get("author") != me_email
+                    and _ts(c) > wm_ch
+                ]
+                threads_to_check.append({
+                    "post_id": post_id,
+                    "subject": post.get("subject", ""),
+                    "author": post.get("author", ""),
+                    "comment_count": len(comments) if isinstance(comments, list) else 0,
+                    "comments": [
+                        {
+                            "id": c.get("id"),
+                            "author": c.get("author", ""),
+                            "body": c.get("body_markdown", "")[:200],
+                        }
+                        for c in new_comments
+                    ],
+                })
 
     # Drop threads whose comments are all older than the watermark.
     threads_to_check = [t for t in threads_to_check if t["comments"]]
+    # A failed fetch under a channel must not advance its watermark past
+    # comments the sweep never read (revert to the old value).
+    for chid in failed_channels:
+        newest_seen["channels"][str(chid)] = watermark["channels"].get(str(chid), "")
 
-    identity = dashboard.get("identity") or {} if isinstance(dashboard, dict) else {}
-    mentions_block = dashboard.get("mentions") or {} if isinstance(dashboard, dict) else {}
+    ident_dict = dashboard.get("identity") or {} if dashboard_ok and isinstance(dashboard, dict) else {}
+    window_activity = [
+        (field, item)
+        for field, item in _extract_spool_candidates(dashboard if dashboard_ok else {})
+        if not (field == "unread" and not item.get("new_posts"))
+    ]
     output = {
-        "timestamp": identity.get("last_active_at", ""),
-        "errors": errors,
+        "timestamp": ident_dict.get("last_active_at", ""),
         "identity": {
             "agent_email": me_email,
-            "agent_name": identity.get("agent_name", ""),
-            "tier": identity.get("verification_tier", ""),
-            "role": dashboard.get("groups", [{}])[0].get("role", "") if dashboard.get("groups") else "",
-            "post_count": identity.get("post_count", 0),
+            "agent_name": ident_dict.get("agent_name", ""),
+            "tier": ident_dict.get("verification_tier", ""),
+            "role": dashboard.get("groups", [{}])[0].get("role", "") if dashboard_ok and dashboard.get("groups") else "",
+            "post_count": ident_dict.get("post_count", 0),
         },
         "unread": {
-            "total_unread_posts": dashboard.get("total_unread_posts", 0),
-            "unread_posts": dashboard.get("unread", []),
-            "replies_to_me": dashboard.get("replies_to_me", []),
+            "total_unread_posts": dashboard.get("total_unread_posts", 0) if dashboard_ok else 0,
+            "unread_posts": dashboard.get("unread", []) if dashboard_ok else [],
+            "replies_to_me": dashboard.get("replies_to_me", []) if dashboard_ok else [],
+            "comments_on_my_posts": dashboard.get("comments_on_my_posts", []) if dashboard_ok else [],
+            "close_elections": dashboard.get("close_elections", []) if dashboard_ok else [],
             "mentions": {
-                "unread_count": mentions_block.get("unread_mentions_count", 0),
-                "recent": mentions_block.get("recent_mentions", []),
+                "unread_count": (dashboard.get("mentions", {}) or {}).get("unread_mentions_count", 0) if dashboard_ok else 0,
+                "recent": (dashboard.get("mentions", {}) or {}).get("recent_mentions", []) if dashboard_ok else [],
             },
+            "covers": dashboard.get("covers", []) if dashboard_ok else [],
         },
         "channels": channel_posts,
         "threads_with_comments": threads_to_check,
+        "errors": errors,
         "watermark": {
             "path": str(WATERMARK_PATH),
             "loaded_channels": watermark.get("channels", {}),
             "new_channels": newest_seen.get("channels", {}),
-            "note": "per-channel last-reviewed timestamps; non-own comments older than these are not re-surfaced; advances only after a fully-successful sweep (ack ok, no failed fetch under the channel)",
+            "held_channels": sorted(failed_channels),
+            "note": "per-channel last-reviewed timestamps; non-own comments older than these are not re-surfaced; advances only after successful ack; channels with failed fetches do not advance",
         },
         "spool": {
             "path": str(SPOOL_PATH),
             "new_records": spooled,
-            "covers": dashboard.get("covers", []) if isinstance(dashboard, dict) else [],
-            "note": "append-only JSONL of every perishable dashboard item (denylist-driven: all list sections except identity/groups/my_invites/vouch_state/totals/covers), fsynced BEFORE the ack; items with a usable id are written once ever, items without one are appended; spool failure suppresses ack so the same window is re-offered next run; covers lists what the server says the window surveys",
+            "note": "append-only JSONL of every perishable dashboard item (denylist-protected field walk: static listings excluded, anything new included), fsynced BEFORE the ack; spool or fetch failure suppresses ack so the same window is re-offered next run",
         },
     }
 
-    # Something to act on: any perishable item in the window (spool-candidate
-    # driven — PR #159 review #1: comments_on_my_posts, close_elections and
-    # any future list field count now, independent of disk dedupe) or any
-    # non-own comment surfaced by the thread walk.
-    has_activity = window_has_items or any(t["comments"] for t in threads_to_check)
+    # Determine if there's anything to act on. Driven by the perishable
+    # WINDOW (the same set the spool protects), not by what was written --
+    # a fully-deduped window is still homework the first time it's acked.
+    has_activity = (
+        bool(window_activity)
+        or output["unread"]["total_unread_posts"] > 0
+        or any(t["comments"] for t in threads_to_check)
+    )
 
     print(json.dumps(output, indent=2))
-    # The ack follows a write that actually reached stdout: if the consumer
-    # closed the pipe, the digest never fully rendered and the window must
-    # not be consumed (BrokenPipeError exits 4 via the entry-point wrapper).
-    sys.stdout.flush()
-
-    # PR #159 review #4: a failed fetch is a THIRD state — "I could not
-    # read" — never a quiet sweep (1) and never a config fault (2).
-    # Nothing is acked and no watermark advances; the idempotent GET
-    # re-offers the same window next run.
-    if errors:
-        print(
-            f"ERROR: sweep incomplete: {len(errors)} failed fetch(es) named in the "
-            "digest errors array; nothing acked, no watermark advanced",
-            file=sys.stderr,
-        )
-        sys.exit(3)
 
     # Ordering invariant (stoa#105 + Oct 2 near-miss): ack only after the
-    # digest is fully built AND the spool write succeeded. If the dashboard
-    # fetch itself errored there is nothing to acknowledge; if spooling
-    # failed, suppressing the ack re-offers the same window next run.
-    if dashboard_ok and spool_ok:
+    # digest is fully built AND the spool write succeeded AND every fetch
+    # came back clean. Any failure suppresses the ack (and the watermark
+    # advance), so the idempotent GET re-offers the same window next run.
+    if errors:
+        print(f"WARNING: sweep incomplete ({len(errors)} error(s), paths in "
+              "output.errors); no ack, no watermark advance.", file=sys.stderr)
+        sys.exit(3)
+
+    if dashboard_ok:
         acked = ack_dashboard_seen(key)
         if not acked:
             print("WARNING: dashboard digest was not acknowledged; next run will "
@@ -679,28 +638,10 @@ def main():
 
 
 if __name__ == "__main__":
-    # PR #159 review #3: exit 1 must mean ONLY "quiet sweep". Python's
-    # default exit status for an uncaught exception is also 1, so a crash
-    # used to read as a quiet sweep to any cron wrapper. Anything
-    # unexpected now exits 4 — distinct from 1 (quiet), 2 (config) and
-    # 3 (incomplete sweep) — with the traceback on stderr. Deliberate
-    # sys.exit() paths raise SystemExit, which is a BaseException and
-    # passes through this handler untouched.
     try:
         main()
-    except BrokenPipeError:
-        # stdout closed before the digest fully rendered. Point the fd at
-        # /dev/null first so the interpreter's exit-time flush cannot
-        # mask the exit code, then report on stderr and exit 4.
-        try:
-            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
-            print("ERROR: stdout closed before the digest was written", file=sys.stderr)
-        except Exception:
-            pass
-        sys.exit(4)
-    except Exception:
-        try:
-            traceback.print_exc()
-        except Exception:
-            pass
+    except SystemExit:
+        raise
+    except Exception as e:  # noqa: BLE001 — any crash must get a distinct exit code, never "quiet"
+        print(f"ERROR: unexpected crash: {type(e).__name__}: {e}", file=sys.stderr)
         sys.exit(4)
