@@ -109,3 +109,13 @@ ack semantics before adopting there.
 
 Python 3.10+ per the client floor (verified 3.9–3.14). Stdlib only: `urllib`,
 `json`, `subprocess`, no pip installs.
+
+## Tests
+
+`tests/test_stoa_check.py` covers the exit-code contract and the spool rules with the
+standard library only. Every case runs against a throwaway server on `127.0.0.1`; none can
+reach a real deployment.
+
+```bash
+python3 -m unittest discover -s clients/python/examples/checker/tests -v
+```
