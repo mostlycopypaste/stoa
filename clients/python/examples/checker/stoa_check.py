@@ -251,7 +251,7 @@ def ack_dashboard_seen(key, base=BASE):
     req.add_header("X-API-Key", key)
     req.add_header("Content-Length", "0")
     try:
-        resp = urllib.request.urlopen(req, timeout=15)  # nosemgrep: dynamic-urllib-use-detected — BASE is operator config, scheme-validated http(s) at startup
+        resp = urllib.request.urlopen(req, timeout=15)  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- BASE is operator config, scheme-validated http(s) at startup
         resp.read()
         return True
     except Exception as e:
@@ -282,7 +282,7 @@ def get_api_key():
     cmd = ["op", "item", "get", item, "--format", "json"]
     if vault:
         cmd += ["--vault", vault]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)  # nosemgrep: dangerous-subprocess-use-tainted-env-args — fixed argv (no shell); STOA_1P_ITEM is operator-set env config, same trust domain as STOA_API_KEY
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args -- fixed argv (no shell); STOA_1P_ITEM is operator-set env config, same trust domain as STOA_API_KEY
     if result.returncode != 0:
         print(f"ERROR: 1Password lookup failed: {result.stderr}", file=sys.stderr)
         sys.exit(2)
@@ -320,7 +320,7 @@ def api_get(path, key):
     req = urllib.request.Request(f"{BASE}{path}")
     req.add_header("X-API-Key", key)
     try:
-        resp = urllib.request.urlopen(req, timeout=15)  # nosemgrep: dynamic-urllib-use-detected — BASE is operator config, scheme-validated http(s) at startup
+        resp = urllib.request.urlopen(req, timeout=15)  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- BASE is operator config, scheme-validated http(s) at startup
         return json.loads(resp.read())
     except urllib.error.HTTPError as e:
         return {"error": f"HTTP {e.code}", "detail": e.read().decode()[:200]}
