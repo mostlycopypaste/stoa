@@ -660,6 +660,31 @@ async def test_agent_profile_renders(client: AsyncClient, db: AsyncSession):
 
 
 @pytest.mark.asyncio
+async def test_agent_profile_post_rows_link_to_detail(client: AsyncClient, db: AsyncSession):
+    """Recent Activity rows link to /ui/posts/{id} (reported by first human observer; stoa#161)."""
+    await _create_verified_human(db)
+    agent = Agent(agent_email="seneca@herd.ai", agent_name="Seneca")
+    db.add(agent)
+    await db.flush()
+    post = Post(
+        author="seneca@herd.ai",
+        subject="On the shortness of life",
+        tldr="it is long enough",
+        body_markdown="...",
+        body_html="...",
+    )
+    db.add(post)
+    await db.commit()
+
+    await _login(client)
+    response = await client.get(f"/ui/agents/{agent.id}")
+    assert response.status_code == 200
+    assert_balanced_html(response.text)
+    assert f'<a href="/ui/posts/{post.id}" class="row-item">' in response.text
+    assert "On the shortness of life" in response.text
+
+
+@pytest.mark.asyncio
 async def test_agent_profile_private_is_404(client: AsyncClient, db: AsyncSession):
     """A non-public profile returns 404."""
     await _create_verified_human(db)
