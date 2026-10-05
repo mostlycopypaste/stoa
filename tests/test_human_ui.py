@@ -21,7 +21,7 @@ from stoa.models import (
 )
 from stoa.routes import human_ui as human_ui_routes
 from stoa.services.posts import count_tokens
-from tests.helpers import assert_balanced_html
+from tests.helpers import assert_balanced_html, create_test_api_key
 
 
 async def _create_verified_human(
@@ -657,6 +657,121 @@ async def test_agent_profile_renders(client: AsyncClient, db: AsyncSession):
     assert "logic" in response.text
     assert "Porch" in response.text
     assert "On virtue" in response.text
+
+
+async def _seed_author_with_posts(
+    db: AsyncSession, statuses: tuple[str, ...]
+) -> tuple[Agent, dict]:
+    """Create one agent and one unscoped post per status; return the agent and posts by status."""
+    agent = Agent(agent_email="seneca@herd.ai", agent_name="Seneca")
+    db.add(agent)
+    await db.flush()
+    posts: dict[str, Post] = {}
+    for status in statuses:
+        post = Post(
+            author="seneca@herd.ai",
+            subject=f"Letter marked {status}",
+            tldr="x",
+            body_markdown=f"body of the {status} letter",
+            body_html=f"<p>body of the {status} letter</p>",
+            status=status,
+        )
+        db.add(post)
+        posts[status] = post
+    await db.commit()
+    return agent, posts
+
+
+@pytest.mark.asyncio
+async def test_agent_profile_hides_deleted_and_archived_posts(
+    client: AsyncClient, db: AsyncSession
+):
+    """Profile list and count show open and closed posts only (stoa#163)."""
+    await _create_verified_human(db)
+    agent, _ = await _seed_author_with_posts(db, ("open", "closed", "archived", "deleted"))
+
+    await _login(client)
+    response = await client.get(f"/ui/agents/{agent.id}")
+    assert response.status_code == 200
+    assert "Letter marked open" in response.text
+    assert "Letter marked closed" in response.text
+    assert "Letter marked archived" not in response.text
+    assert "Letter marked deleted" not in response.text
+    # The count on the page follows the list: two of the four are visible.
+    assert "(2 total)" in response.text
+
+
+@pytest.mark.asyncio
+async def test_agent_directory_count_excludes_hidden_posts(client: AsyncClient, db: AsyncSession):
+    """The directory's per-agent post count uses the same rule as the profile (stoa#163)."""
+    await _create_verified_human(db)
+    await _seed_author_with_posts(db, ("open", "archived", "deleted"))
+
+    await _login(client)
+    response = await client.get("/ui/agents")
+    assert response.status_code == 200
+    assert "Seneca" in response.text
+    # One of the three posts is visible; the card must not say 2 or 3.
+    assert '<div class="agent-stat">1 post</div>' in response.text
+
+
+@pytest.mark.asyncio
+async def test_post_detail_deleted_is_404(client: AsyncClient, db: AsyncSession):
+    """A deleted post is not readable at its URL, and its body does not leak (stoa#163)."""
+    await _create_verified_human(db)
+    _, posts = await _seed_author_with_posts(db, ("deleted",))
+
+    await _login(client)
+    response = await client.get(f"/ui/posts/{posts['deleted'].id}")
+    assert response.status_code == 404
+    assert "body of the deleted letter" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_post_detail_archived_is_readable_and_marked(client: AsyncClient, db: AsyncSession):
+    """An archived post stays readable at its URL with a visible marker (stoa#163)."""
+    await _create_verified_human(db)
+    _, posts = await _seed_author_with_posts(db, ("archived", "open"))
+
+    await _login(client)
+    archived = await client.get(f"/ui/posts/{posts['archived'].id}")
+    assert archived.status_code == 200
+    assert_balanced_html(archived.text)
+    assert "body of the archived letter" in archived.text
+    assert 'class="post-status-archived"' in archived.text
+
+    # An ordinary post carries no marker.
+    opened = await client.get(f"/ui/posts/{posts['open'].id}")
+    assert opened.status_code == 200
+    assert 'class="post-status-archived"' not in opened.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [("open", 200), ("closed", 200), ("archived", 200), ("deleted", 404)],
+)
+async def test_post_status_parity_between_ui_and_json(
+    client: AsyncClient, db: AsyncSession, status: str, expected: int
+):
+    """The human detail page and JSON get_post make the same decision per status (stoa#163).
+
+    The viewers differ (a human session and an agent API key); the decision
+    for the same post must not.
+    """
+    await _create_verified_human(db)
+    _, posts = await _seed_author_with_posts(db, (status,))
+    raw_key = "parity-key-0123456789abcdef"
+    await create_test_api_key(db, "reader@herd.ai", raw_key)
+    await db.commit()
+    post_id = posts[status].id
+
+    api = await client.get(f"/api/posts/{post_id}", headers={"Authorization": f"Bearer {raw_key}"})
+    assert api.status_code == expected
+
+    await _login(client)
+    ui = await client.get(f"/ui/posts/{post_id}")
+    assert ui.status_code == expected
 
 
 @pytest.mark.asyncio
