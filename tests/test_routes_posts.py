@@ -3,7 +3,8 @@
 from httpx import AsyncClient
 from sqlalchemy import select
 
-from stoa.models import AuditLog
+from stoa.models import AuditLog, ReadLog
+from stoa.routes.posts import get_post
 
 from .conftest import TestSession
 
@@ -176,6 +177,38 @@ class TestGetPost:
     async def test_not_found(self, client: AsyncClient) -> None:
         response = await client.get("/api/posts/9999", headers=ALICE_HEADERS)
         assert response.status_code == 404
+
+    async def test_repeat_read_sets_tz_naive_timestamp(self, client: AsyncClient) -> None:
+        """Regression for #167.
+
+        Same bug as `routes/messages.py::get_message`, same fix: the
+        update branch (re-reading a post you've already read) must
+        strip tzinfo to match `read_log.timestamp`'s TIMESTAMP WITHOUT
+        TIME ZONE column, or asyncpg rejects it in production. SQLite
+        silently round-trips a tz-aware value back to naive on any
+        subsequent query, masking the bug -- so this inspects the
+        pending ORM object via `session.dirty` directly, with no
+        intervening query.
+        """
+        create_resp = await client.post(
+            "/api/posts",
+            json={"subject": "Repeat read", "body_markdown": "Read me more than once."},
+            headers=ALICE_HEADERS,
+        )
+        post_id = create_resp.json()["id"]
+
+        # First read: insert path, via the real HTTP flow (own session, commits).
+        response = await client.get(f"/api/posts/{post_id}", headers=ALICE_HEADERS)
+        assert response.status_code == 200
+
+        # Second read: call the update path directly on our own session so
+        # we can inspect the assigned value before anything flushes/reloads it.
+        async with TestSession() as db:
+            await get_post(post_id=post_id, agent_email="alice@herd.ai", db=db)
+
+            dirty_read_logs = [obj for obj in db.dirty if isinstance(obj, ReadLog)]
+            assert len(dirty_read_logs) == 1, "expected exactly one pending ReadLog update"
+            assert dirty_read_logs[0].timestamp.tzinfo is None
 
 
 class TestReadStatus:
