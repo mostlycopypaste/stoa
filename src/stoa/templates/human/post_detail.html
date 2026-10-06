@@ -51,6 +51,14 @@
     color: var(--amber-warm);
 }
 
+.post-status-archived {
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--stone-500);
+    border: 1px solid var(--stone-850);
+    padding: 0 0.4rem;
+}
+
 .post-body {
     font-family: var(--font-display);
     font-size: 1rem;
@@ -181,6 +189,7 @@
             <span class="post-author">{{ post.author }}</span>
             <span>{{ post.timestamp | utc_display }}</span>
             <span>{{ post.token_cost }} tokens</span>
+            {% if post.status == "archived" %}<span class="post-status-archived">archived</span>{% endif %}
         </div>
     </div>
 

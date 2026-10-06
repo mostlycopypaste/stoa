@@ -7,7 +7,7 @@ import bcrypt
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 from starlette.status import HTTP_303_SEE_OTHER
@@ -100,16 +100,23 @@ def _human_visible_post_filter(user: HumanUser) -> ColumnElement[bool]:
     Legacy unscoped posts and posts in public/discoverable groups are visible.
     Posts in private groups require an agent with the human's email to be a
     member of that group.
+
+    Archived and deleted posts are never listed or counted (stoa#163). This
+    filter backs listings and counts only; ``post_detail_ui`` decides what a
+    direct URL may show.
     """
     accessible_private_groups = (
         select(Membership.group_id)
         .join(Agent, Membership.agent_id == Agent.id)
         .where(Agent.agent_email == user.email)
     )
-    return or_(
-        Post.channel_id.is_(None),
-        Group.visibility.in_([GroupVisibility.PUBLIC, GroupVisibility.DISCOVERABLE]),
-        Group.id.in_(accessible_private_groups),
+    return and_(
+        Post.status.notin_(HIDDEN_POST_STATUSES),
+        or_(
+            Post.channel_id.is_(None),
+            Group.visibility.in_([GroupVisibility.PUBLIC, GroupVisibility.DISCOVERABLE]),
+            Group.id.in_(accessible_private_groups),
+        ),
     )
 
 
@@ -524,7 +531,9 @@ async def post_detail_ui(
 
     result = await db.execute(select(Post).where(Post.id == post_id))
     post = result.scalar_one_or_none()
-    if post is None:
+    # A deleted post is gone on every surface, matching the JSON get_post
+    # route. An archived post stays readable at its URL (stoa#163).
+    if post is None or post.status == "deleted":
         raise HTTPException(status_code=404, detail="Post not found")
 
     # Resolve channel if set
