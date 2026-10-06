@@ -133,13 +133,13 @@ async def request_challenge(
     *,
     purpose: str,
     ttl_seconds: int,
-) -> AuthChallenge:
+) -> tuple[AuthChallenge, str]:
     """Issue a challenge for a verified agent: requested -> challenged.
 
     The row is created in ``requested`` (no code yet), then transitions to
-    ``challenged`` with the code digest and the mail dispatch. Email delivery
-    is best-effort and never blocks the request (§4.1): a failed send leaves
-    the challenge inert — digest-only, single-use, TTL-bounded. New mints
+    ``challenged`` with the code digest. Returns the row and transient plaintext
+    code; the caller must commit before scheduling best-effort email delivery
+    after the response (§4.1). The code is never persisted or logged. New mints
     never invalidate outstanding codes (§4.2 lockout-DoS).
     """
     now = _utcnow()
@@ -160,18 +160,21 @@ async def request_challenge(
     challenge.challenged_at = _utcnow()
     challenge.state = CHALLENGE_STATE_CHALLENGED
     await db.flush()
+    return challenge, code
 
+
+async def dispatch_challenge_email(*, to: str, code: str, agent_id: int, purpose: str) -> None:
+    """Deliver a committed challenge after the response, logging send exceptions."""
     try:
-        await send_auth_challenge_email(to=agent.agent_email, code=code)
+        await send_auth_challenge_email(to=to, code=code)
     except Exception:
         # Best-effort: the challenge row stands (the undelivered code is
         # unusable by anyone and expires), the caller's flow is unaffected.
         logger.exception(
             "Auth challenge email dispatch failed for agent_id=%s purpose=%s",
-            agent.id,
+            agent_id,
             purpose,
         )
-    return challenge
 
 
 async def find_open_challenge(

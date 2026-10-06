@@ -8,17 +8,23 @@ names, in Rockbot's required deterministic-interleaving form:
 - ``test_rotator_stalled_mirror``
 """
 
+import asyncio
 import hashlib
+import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.types import Message, Receive, Scope, Send
 
 from stoa import email as email_mod
 from stoa.config import settings
+from stoa.main import app
 from stoa.models import Agent, AuthChallenge, AuthSession
 from stoa.services import auth_sessions as auth_service
 
@@ -245,6 +251,108 @@ async def test_rotator_stalled_mirror(
 
 
 # --- Challenge issuance: uniformity, silent no-ops, caps ---
+
+
+async def test_challenge_response_does_not_wait_for_email(
+    client: AsyncClient, carol_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Observe the wire response while delivery is blocked, after a real commit."""
+    committed = asyncio.Event()
+    sending = asyncio.Event()
+    release_email = asyncio.Event()
+    response_complete = asyncio.Event()
+    messages: list[Message] = []
+    deliveries: list[tuple[str, str, bool]] = []
+    commit = AsyncSession.commit
+
+    async def track_commit(session: AsyncSession) -> None:
+        await commit(session)
+        committed.set()
+
+    async def slow_send(*, to: str, code: str) -> bool:
+        deliveries.append((to, code, committed.is_set()))
+        sending.set()
+        await release_email.wait()
+        return True
+
+    async def observe_response(scope: Scope, receive: Receive, send: Send) -> None:
+        async def observe_send(message: Message) -> None:
+            messages.append(message)
+            await send(message)
+            if message["type"] == "http.response.body" and not message.get("more_body", False):
+                response_complete.set()
+
+        await app(scope, receive, observe_send)
+
+    monkeypatch.setattr(AsyncSession, "commit", track_commit)
+    monkeypatch.setattr(auth_service, "send_auth_challenge_email", slow_send)
+    # ASGITransport waits for background tasks before client.post returns.
+    # Observe ASGI send instead: this is when a network client receives the 202.
+    async with AsyncClient(
+        transport=ASGITransport(app=observe_response), base_url="http://test"
+    ) as wire_client:
+        request = asyncio.create_task(
+            wire_client.post("/api/auth/challenge", json={"agent_id": carol_id})
+        )
+        try:
+            # Timeout is only a deadlock guard; correctness uses event ordering.
+            async with asyncio.timeout(5):
+                await sending.wait()
+                await response_complete.wait()
+            assert not release_email.is_set()
+            assert messages[0]["status"] == 202
+            body = b"".join(m["body"] for m in messages if m["type"] == "http.response.body")
+            assert json.loads(body) == {"status": "challenge_initiated"}
+            assert len(deliveries) == 1
+            to, code, committed_before_send = deliveries[0]
+            assert committed_before_send
+            assert to == CAROL
+            assert re.fullmatch(r"[A-Za-z0-9_-]{43}", code)
+            rows = await _fetch_challenges(carol_id)
+            assert len(rows) == 1
+            assert rows[0].code_digest == auth_service.code_digest(code)
+            assert rows[0].state == "challenged"
+        finally:
+            release_email.set()
+            await request
+
+
+@pytest.mark.parametrize("purpose", ["mint", "revoke"])
+async def test_challenge_email_exception_is_logged_and_still_returns_202(
+    client: AsyncClient,
+    carol_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    purpose: str,
+) -> None:
+    deliveries: list[tuple[str, str]] = []
+
+    async def failed_send(*, to: str, code: str) -> bool:
+        deliveries.append((to, code))
+        raise RuntimeError("mail provider unavailable")
+
+    monkeypatch.setattr(auth_service, "send_auth_challenge_email", failed_send)
+    with caplog.at_level(logging.ERROR, logger=auth_service.__name__):
+        resp = await client.post(
+            "/api/auth/challenge", json={"agent_id": carol_id, "purpose": purpose}
+        )
+    assert resp.status_code == 202
+    assert resp.json() == {"status": "challenge_initiated"}
+    assert len(deliveries) == 1
+    to, code = deliveries[0]
+    assert to == CAROL
+    rows = await _fetch_challenges(carol_id)
+    assert len(rows) == 1
+    assert rows[0].code_digest == auth_service.code_digest(code)
+    assert rows[0].purpose == purpose
+    assert rows[0].state == "challenged"
+    records = [r for r in caplog.records if r.name == auth_service.__name__]
+    assert len(records) == 1
+    assert records[0].getMessage() == (
+        f"Auth challenge email dispatch failed for agent_id={carol_id} purpose={purpose}"
+    )
+    assert records[0].exc_info is not None
+    assert code not in caplog.text
 
 
 async def test_challenge_unknown_and_unverified_are_silent_noops(

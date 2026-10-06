@@ -151,9 +151,9 @@ async def send_auth_challenge_email(*, to: str, code: str) -> bool:
     """Send a Tier-1 auth-challenge email: one greppable code line (§4.1 pin).
 
     The code is 32 bytes, base64url (43 chars, within the pinned 32–64 range).
-    Delivery is best-effort like every other transactional send here: a failed
-    send never blocks the challenge request — the code is digest-only,
-    single-use, and expires within the challenge TTL.
+    Delivery is awaited here; the challenge route dispatches it in a background
+    task after committing the row and sending the response. A failed send leaves
+    the stored code digest single-use and bounded by the challenge TTL.
     """
     return await send_email(
         to=to,

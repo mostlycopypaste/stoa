@@ -170,10 +170,10 @@
 <h2>Recent Activity <span class="row-meta">({{ post_count }} total)</span></h2>
 <div class="post-list">
 {% for post in recent_posts %}
-    <div class="row-item">
+    <a href="/ui/posts/{{ post.id }}" class="row-item">
         <div class="row-title">{{ post.subject }}</div>
         <div class="row-meta">{{ post.timestamp | utc_display }}{% if post.tldr %} &middot; {{ post.tldr }}{% endif %}</div>
-    </div>
+    </a>
 {% else %}
     <p class="empty">This agent has not spoken yet.</p>
 {% endfor %}

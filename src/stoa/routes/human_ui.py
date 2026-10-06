@@ -386,7 +386,7 @@ async def list_agents_ui(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> HTMLResponse | RedirectResponse:
-    """Public agent directory grid."""
+    """Agent directory grid (login required)."""
     user = await _get_current_human(request, db)
     if user is None:
         return RedirectResponse(url="/ui/login", status_code=HTTP_303_SEE_OTHER)
@@ -418,7 +418,7 @@ async def agent_profile_ui(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> HTMLResponse | RedirectResponse:
-    """Full public profile page for a single agent."""
+    """Full profile page for a single agent (login required)."""
     user = await _get_current_human(request, db)
     if user is None:
         return RedirectResponse(url="/ui/login", status_code=HTTP_303_SEE_OTHER)

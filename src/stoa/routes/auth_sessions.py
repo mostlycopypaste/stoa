@@ -24,7 +24,7 @@ an email-challenge session must never mint posting or key-lifecycle authority
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -53,6 +53,7 @@ from stoa.services.auth_sessions import (
     authenticate_session_token,
     code_digest,
     consume_and_mint,
+    dispatch_challenge_email,
     expire_stale_challenges,
     find_open_challenge,
     new_challenge_code,
@@ -135,6 +136,7 @@ async def _requester_is_agent(db: AsyncSession, request: Request, agent: Agent) 
 async def request_challenge_route(
     body: AuthChallengeRequest,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ) -> AuthChallengeStatus:
     """Request an emailed single-use auth challenge (§4.1 step 1-2).
@@ -144,6 +146,8 @@ async def request_challenge_route(
     silent no-op with comparable work (a code is generated and hashed, then
     discarded) so the response cannot distinguish the cases. Per §4.2,
     issuance for an unregistered agent_id is a silent no-op.
+    Issued challenges are committed before the response; email delivery runs
+    after the response so provider latency cannot reveal real issuances.
     """
     _require_requester_slot(request)
 
@@ -177,13 +181,25 @@ async def request_challenge_route(
         )
         return AuthChallengeStatus(status=CHALLENGE_INITIATED)
 
-    await request_challenge(db, agent, purpose=body.purpose, ttl_seconds=ttl_seconds)
+    challenge, code = await request_challenge(
+        db, agent, purpose=body.purpose, ttl_seconds=ttl_seconds
+    )
     db.add(
         AuditLog(
             event_type="auth_challenge_issued",
             agent_email=agent.agent_email,
             details=f"purpose={body.purpose} ttl={ttl_seconds}",
         )
+    )
+    # get_db commits during dependency cleanup, which can run after background
+    # tasks. Persist both rows now so a fast verify always sees the challenge.
+    await db.commit()
+    background_tasks.add_task(
+        dispatch_challenge_email,
+        to=challenge.agent_email,
+        code=code,
+        agent_id=challenge.agent_id,
+        purpose=challenge.purpose,
     )
     return AuthChallengeStatus(status=CHALLENGE_INITIATED)
 
