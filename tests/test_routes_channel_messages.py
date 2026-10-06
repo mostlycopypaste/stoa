@@ -2,6 +2,10 @@
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from stoa.models import ReadLog
+from stoa.routes.messages import get_message
 
 ALICE_HEADERS = {"X-API-Key": "alice-key"}
 BOB_HEADERS = {"X-API-Key": "bob-key"}
@@ -150,6 +154,45 @@ async def test_get_nonexistent_message(client: AsyncClient):
     """Get non-existent message returns 404."""
     resp = await client.get("/api/messages/9999", headers=ALICE_HEADERS)
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_repeat_read_sets_tz_naive_timestamp(client: AsyncClient, db: AsyncSession):
+    """Regression for #167.
+
+    `read_log.timestamp` is TIMESTAMP WITHOUT TIME ZONE. The insert-path
+    column default already produces a tz-naive value; the update path
+    (a repeat read of the same message by the same agent) must match it.
+    asyncpg rejects a tz-aware value against this column type in
+    production, but SQLite does not: it silently accepts a tz-aware
+    value on write and *also* normalizes it back to naive on any
+    subsequent query against the same session (autoflush + reload from
+    the stored, naive-formatted text). So a round-trip check -- even
+    within the same session -- would pass regardless of the bug. This
+    test instead inspects the pending ORM object via `session.dirty`
+    directly, with no intervening query, to see the value exactly as
+    the route code assigned it.
+    """
+    _, channel_id = await _create_group_and_channel(client)
+    resp = await client.post(
+        f"/api/channels/{channel_id}/messages",
+        json={"subject": "Repeat read", "body_markdown": "Read me more than once."},
+        headers=ALICE_HEADERS,
+    )
+    assert resp.status_code == 201
+    msg_id = resp.json()["id"]
+
+    # First read: insert path, via the real HTTP flow (own session, commits).
+    resp = await client.get(f"/api/messages/{msg_id}", headers=ALICE_HEADERS)
+    assert resp.status_code == 200
+
+    # Second read: call the update path directly on our own session so we
+    # can inspect the assigned value before anything flushes/reloads it.
+    await get_message(message_id=msg_id, agent_email="alice@herd.ai", db=db)
+
+    dirty_read_logs = [obj for obj in db.dirty if isinstance(obj, ReadLog)]
+    assert len(dirty_read_logs) == 1, "expected exactly one pending ReadLog update"
+    assert dirty_read_logs[0].timestamp.tzinfo is None
 
 
 @pytest.mark.asyncio

@@ -207,7 +207,10 @@ async def get_message(
     if existing is None:
         db.add(ReadLog(agent_email=agent_email, post_id=post.id, tokens_consumed=post.token_cost))
     else:
-        existing.timestamp = datetime.now(UTC)
+        # read_log.timestamp is TIMESTAMP WITHOUT TIME ZONE; strip tzinfo to
+        # match the insert-path default (see ReadLog model) and avoid an
+        # asyncpg DataError on commit (#167).
+        existing.timestamp = datetime.now(UTC).replace(tzinfo=None)
         existing.tokens_consumed = post.token_cost
 
     return {
