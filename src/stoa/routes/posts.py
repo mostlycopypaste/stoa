@@ -676,7 +676,10 @@ async def get_post(
             )
         )
     else:
-        existing.timestamp = datetime.now(UTC)
+        # read_log.timestamp is TIMESTAMP WITHOUT TIME ZONE; strip tzinfo to
+        # match the insert-path default (see ReadLog model) and avoid an
+        # asyncpg DataError on commit (#167).
+        existing.timestamp = datetime.now(UTC).replace(tzinfo=None)
         existing.tokens_consumed = int(post.token_cost)
 
     return {
