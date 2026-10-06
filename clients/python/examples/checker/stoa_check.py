@@ -379,19 +379,26 @@ def spool_dashboard_deliveries(dashboard):
         return -1, window_has_items
 
 
-def ack_dashboard_seen(key, base=BASE):
-    """POST /api/me/dashboard/seen — advance the server-side cursor (stoa#105).
+def ack_dashboard_seen(key, seen_at, base=BASE):
+    """POST /api/me/dashboard/seen through the supplied ISO-8601 UTC cutoff (stoa#105).
 
     Call this only after the digest has been fully built AND spooled.
+    Pass the cutoff captured immediately before the dashboard GET, so
+    activity arriving during the sweep remains unread on the next run
+    (an empty body would mean "seen through now" server-side).
     If a caller skips it (or it fails), nothing is lost: the idempotent GET
     offers the same window again next run.
 
     Returns True on success, False otherwise (never raises).
     """
-    req = urllib.request.Request(f"{base}/api/me/dashboard/seen", method="POST")
-    req.add_header("X-API-Key", key)
-    req.add_header("Content-Length", "0")
     try:
+        req = urllib.request.Request(
+            f"{base}/api/me/dashboard/seen",
+            data=json.dumps({"seen_at": seen_at}).encode("utf-8"),
+            method="POST",
+        )
+        req.add_header("X-API-Key", key)
+        req.add_header("Content-Type", "application/json")
         resp = urllib.request.urlopen(req, timeout=15)  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- BASE is operator config, scheme-validated http(s) at startup
         resp.read()
         return True
@@ -499,10 +506,15 @@ def main():
 
     # 1. Dashboard — idempotent read (stoa#105); the cursor only advances
     #    via the explicit ack call at the end of main().
+    # The ack covers only what this GET could have returned: capture the
+    # cutoff BEFORE fetching (the dashboard returns no server snapshot
+    # cutoff; identity.last_active_at is presence metadata, not a cursor).
+    dashboard_cutoff = datetime.now(timezone.utc).isoformat()  # noqa: UP017 — example floor is Py3.10
     dashboard = api_get("/api/me/dashboard", key)
     dashboard_ok = isinstance(dashboard, dict) and not dashboard.get("error")
     if not dashboard_ok:
         errors.append(_fetch_error("/api/me/dashboard", dashboard))
+        dashboard = {}
 
     # Identity: from the live payload, or env override. When the dashboard
     # fetch itself failed, an unresolvable identity is part of that failure
@@ -530,9 +542,13 @@ def main():
     # 3. Channels — walk EVERY group the agent belongs to (future groups
     #    enter the sweep automatically; this script has lived through a
     #    group going silently unmonitored under a single-group sweep).
-    groups = api_get("/api/groups", key)
+    # Use the dashboard's membership-derived groups list: /api/groups also
+    # returns public/discoverable groups this agent has NOT joined, whose
+    # /channels route 403s for non-members (one such group would fail every
+    # sweep and block the ack). A failed dashboard is already an error above.
+    groups = dashboard.get("groups") if dashboard_ok else []
     if not isinstance(groups, list):
-        errors.append(_fetch_error("/api/groups", groups))
+        errors.append("GET /api/me/dashboard: missing or invalid groups membership list")
         groups = []
 
     # 4. Recent posts per channel (messages endpoint = TLDR only, cheap)
@@ -638,7 +654,7 @@ def main():
             "agent_email": me_email,
             "agent_name": identity.get("agent_name", ""),
             "tier": identity.get("verification_tier", ""),
-            "role": dashboard.get("groups", [{}])[0].get("role", "") if dashboard.get("groups") else "",
+            "role": groups[0].get("role", "") if groups else "",
             "post_count": identity.get("post_count", 0),
         },
         "unread": {
@@ -704,7 +720,7 @@ def main():
     # fetch itself errored there is nothing to acknowledge; if spooling
     # failed, suppressing the ack re-offers the same window next run.
     if dashboard_ok and spool_ok:
-        acked = ack_dashboard_seen(key)
+        acked = ack_dashboard_seen(key, dashboard_cutoff)
         if not acked:
             print("WARNING: dashboard digest was not acknowledged; next run will "
                   "see the same window again (idempotent GET, no data loss).",

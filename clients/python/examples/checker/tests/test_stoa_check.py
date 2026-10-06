@@ -15,6 +15,7 @@ real entry point and its exit codes (0 homework, 1 quiet, 2 config,
 
 import http.server
 import importlib.util
+import io
 import json
 import os
 import subprocess
@@ -22,7 +23,11 @@ import sys
 import tempfile
 import threading
 import unittest
+import urllib.error
+from contextlib import redirect_stdout
+from datetime import datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parents[1] / "stoa_check.py"
 
@@ -179,7 +184,7 @@ class EndToEnd(unittest.TestCase):
 
     def test_unexpected_payload_shape_exits_4_without_ack(self):
         # Finding 3: an uncaught exception used to exit 1, which also means "quiet".
-        routes = {"/api/me/dashboard": dashboard(), "/api/groups": [{"name": "no id"}]}
+        routes = {"/api/me/dashboard": dashboard(groups=[{"name": "no id"}])}
         proc, _ = self.run_checker(routes)
         self.assertEqual(proc.returncode, 4, proc.stderr)
         self.assertEqual(self.stoa.acks, 0)
@@ -204,7 +209,7 @@ class EndToEnd(unittest.TestCase):
         # Finding 5: a newer post in the same channel must not carry the
         # watermark past comments on a thread that could not be read.
         routes = {
-            "/api/me/dashboard": dashboard(),
+            "/api/me/dashboard": dashboard(groups=[{"id": 1, "name": "g"}]),
             "/api/groups": [{"id": 1, "name": "g"}],
             "/api/groups/1/channels": [{"id": 5, "name": "general"}],
             "/api/channels/5/messages": [
@@ -232,8 +237,8 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(self.stoa.acks, 0)
 
 
-class SpoolUnit(unittest.TestCase):
-    """spool_dashboard_deliveries imported directly, with state in a temp dir."""
+class ImportedChecker(unittest.TestCase):
+    """Import the checker with isolated state and a localhost base URL."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -253,6 +258,10 @@ class SpoolUnit(unittest.TestCase):
             else:
                 os.environ[key] = value
         self.tmp.cleanup()
+
+
+class SpoolUnit(ImportedChecker):
+    """spool_dashboard_deliveries imported directly, with state in a temp dir."""
 
     def mentions(self, *items):
         return {"mentions": {"unread_mentions_count": 0, "recent_mentions": list(items)}}
@@ -301,6 +310,147 @@ class SpoolUnit(unittest.TestCase):
         self.mod.SPOOL_PATH.write_text('["valid json, not an object"]\n', encoding="utf-8")
         written, _ = spool({"comments_on_my_posts": [{"comment_id": 1, "post_id": 2}]})
         self.assertEqual(written, 1)
+
+
+class SweepUnit(ImportedChecker):
+    """Run main with mocked HTTP, without opening sockets."""
+
+    def run_checker(self, routes, email=""):
+        requests = []
+
+        def urlopen(req, timeout):
+            requests.append(req)
+            path = req.full_url.removeprefix(self.mod.BASE)
+            body = routes[path]
+            if callable(body):
+                body = body(req)
+            if isinstance(body, int):
+                raise urllib.error.HTTPError(
+                    req.full_url, body, "forced failure", {}, io.BytesIO(b"forced failure")
+                )
+            return io.BytesIO(json.dumps(body).encode())
+
+        output = io.StringIO()
+        with (
+            patch.dict(os.environ, {"STOA_API_KEY": "test-key", "STOA_AGENT_EMAIL": email}),
+            patch.object(self.mod.urllib.request, "urlopen", side_effect=urlopen),
+            redirect_stdout(output),
+            self.assertRaises(SystemExit) as exited,
+        ):
+            self.mod.main()
+        return exited.exception.code, json.loads(output.getvalue()), requests
+
+    def test_ack_cutoff_keeps_activity_arriving_during_sweep_unread(self):
+        cutoff = datetime.fromisoformat("2026-01-01T12:00:00+00:00")
+        late_time = cutoff + timedelta(seconds=1)
+        clock = [cutoff]
+        items = [{"comment_id": 1, "timestamp": (cutoff - timedelta(seconds=1)).isoformat()}]
+        cursor = [cutoff - timedelta(days=1)]
+        fetched = []
+        acks = []
+
+        def fetch_dashboard(req):
+            # Advance time during the GET: even a cutoff taken just after
+            # the response would be later than the pre-fetch cutoff.
+            clock[0] += timedelta(milliseconds=500)
+            unread = [
+                item for item in items if datetime.fromisoformat(item["timestamp"]) > cursor[0]
+            ]
+            fetched.append(unread)
+            return dashboard(groups=[{"id": 1, "name": "member"}], comments_on_my_posts=unread)
+
+        def fetch_channels(req):
+            # The first dashboard response is already fetched and spooled.
+            if len(items) == 1:
+                items.append({"comment_id": 2, "timestamp": late_time.isoformat()})
+            clock[0] = late_time + timedelta(seconds=1)
+            return []
+
+        def ack(req):
+            self.assertEqual(req.method, "POST")
+            self.assertEqual(req.get_header("Content-type"), "application/json")
+            self.assertEqual(req.get_header("X-api-key"), "test-key")
+            body = json.loads(req.data)
+            cursor[0] = datetime.fromisoformat(body["seen_at"])
+            acks.append(cursor[0])
+            return body
+
+        routes = {
+            "/api/me/dashboard": fetch_dashboard,
+            "/api/groups/1/channels": fetch_channels,
+            "/api/me/dashboard/seen": ack,
+        }
+        with patch.object(self.mod, "datetime", wraps=datetime) as mock_datetime:
+            mock_datetime.now.side_effect = lambda tz: clock[0]
+            code, digest, _ = self.run_checker(routes)
+            self.assertEqual(code, 0)
+            self.assertEqual(digest["errors"], [])
+            self.assertEqual(acks, [cutoff])
+            self.assertEqual(acks[0].utcoffset(), timedelta(0))
+            self.assertLess(acks[0], late_time)
+            self.assertEqual([item["comment_id"] for item in fetched[0]], [1])
+            code, digest, _ = self.run_checker(routes)
+        self.assertEqual(code, 0)
+        self.assertEqual([item["comment_id"] for item in fetched[1]], [2])
+        self.assertEqual(digest["unread"]["comments_on_my_posts"], [items[1]])
+
+    def test_sweeps_all_dashboard_memberships_without_discovering_public_groups(self):
+        members = [{"id": 1, "name": "first"}, {"id": 2, "name": "second"}]
+        routes = {
+            "/api/me/dashboard": dashboard(groups=members),
+            "/api/groups": [*members, {"id": 3, "name": "public, not joined"}],
+            "/api/groups/1/channels": [{"id": 5, "name": "general"}],
+            "/api/groups/2/channels": [{"id": 6, "name": "news"}],
+            "/api/groups/3/channels": 403,
+            "/api/channels/5/messages": [],
+            "/api/channels/6/messages": [],
+            "/api/me/dashboard/seen": {},
+        }
+        code, digest, requests = self.run_checker(routes)
+        self.assertEqual(code, 1)
+        self.assertEqual(digest["errors"], [])
+        self.assertEqual(set(digest["channels"]), {"5", "6"})
+        self.assertEqual(
+            [req.full_url.removeprefix(self.mod.BASE) for req in requests],
+            [
+                "/api/me/dashboard",
+                "/api/groups/1/channels",
+                "/api/channels/5/messages",
+                "/api/groups/2/channels",
+                "/api/channels/6/messages",
+                "/api/me/dashboard/seen",
+            ],
+        )
+        self.assertTrue(self.mod.WATERMARK_PATH.exists())
+
+    def test_failed_dashboard_cannot_ack_or_save_watermarks(self):
+        for body in (500, []):
+            for email in ("", ME):
+                with self.subTest(body=body, email=email):
+                    code, digest, requests = self.run_checker(
+                        {"/api/me/dashboard": body}, email=email
+                    )
+                    self.assertEqual(code, 3)
+                    self.assertTrue(any("/api/me/dashboard" in error for error in digest["errors"]))
+                    self.assertEqual(len(requests), 1)
+                    self.assertFalse(self.mod.WATERMARK_PATH.exists())
+
+    def test_missing_or_invalid_membership_list_is_incomplete(self):
+        missing_groups = dashboard()
+        del missing_groups["groups"]
+        for body in (missing_groups, dashboard(groups=None), dashboard(groups={"id": 1})):
+            with self.subTest(body=body):
+                code, digest, requests = self.run_checker({"/api/me/dashboard": body})
+                self.assertEqual(code, 3)
+                self.assertTrue(any("membership list" in error for error in digest["errors"]))
+                self.assertEqual(len(requests), 1)
+                self.assertFalse(self.mod.WATERMARK_PATH.exists())
+
+    def test_ack_returns_false_on_request_or_transport_failure(self):
+        with patch.object(self.mod.urllib.request, "urlopen", side_effect=OSError("offline")):
+            self.assertIs(self.mod.ack_dashboard_seen("test-key", "2026-01-01T12:00:00Z"), False)
+        with patch.object(self.mod.urllib.request, "Request", side_effect=ValueError("bad URL")):
+            self.assertIs(self.mod.ack_dashboard_seen("test-key", "2026-01-01T12:00:00Z"), False)
 
 
 if __name__ == "__main__":
