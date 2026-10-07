@@ -23,17 +23,23 @@ from stoa.services.close_votes import (
     thread_participants,
     thread_vote_history,
 )
+from tests.conftest import provision_channel
 from tests.helpers import create_test_api_key
 
 ALICE = {"X-API-Key": "alice-key"}
 BOB = {"X-API-Key": "bob-key"}
 
 
-async def _third_agent(db: AsyncSession) -> dict:
+async def _third_agent(client: AsyncClient, db: AsyncSession) -> dict:
     """Seed a third participant so majority is not the same as unanimity."""
     await create_test_api_key(db, "carol@herd.ai", "carol-key", verification_tier=2)
     await db.commit()
-    return {"X-API-Key": "carol-key"}
+    carol = {"X-API-Key": "carol-key"}
+    # Interactions with channel-scoped posts need group membership (#168) —
+    # join the shared group so a later 403 is about participation, not
+    # channel access.
+    await provision_channel(client, carol)
+    return carol
 
 
 _unique = itertools.count()
@@ -49,12 +55,17 @@ async def _post(
 ) -> int:
     # Bodies must differ: posts.py rejects near-duplicates from the same author.
     body = body or f"Body text for the post, unique marker {next(_unique)}."
+    merged = {**headers, **(extra_headers or {})}
+    # Every post lands in a channel (#168): standalone posts carry one, and
+    # reply authors must be members of the parent's channel — provision/join
+    # once per test client and author.
+    channel_id = await provision_channel(client, merged)
     payload: dict = {"subject": subject, "body_markdown": body}
     if parent_post_id is not None:
         payload["parent_post_id"] = parent_post_id
-    resp = await client.post(
-        "/api/posts", json=payload, headers={**headers, **(extra_headers or {})}
-    )
+    else:
+        payload["channel_id"] = channel_id
+    resp = await client.post("/api/posts", json=payload, headers=merged)
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
 
@@ -63,6 +74,8 @@ async def _comment(
     client: AsyncClient, headers: dict, post_id: int, body: str | None = None
 ) -> int:
     body = body or f"A comment, unique marker {next(_unique)}."
+    # Comments on channel-scoped posts require group membership (#168).
+    await provision_channel(client, headers)
     resp = await client.post(
         f"/api/posts/{post_id}/comments", json={"body_markdown": body}, headers=headers
     )
@@ -162,7 +175,7 @@ class TestMajorityThreshold:
         assert state.soft_closed is False
 
     async def test_three_participants_need_two_votes(self, client: AsyncClient, db: AsyncSession):
-        carol = await _third_agent(db)
+        carol = await _third_agent(client, db)
         root = await _post(client, ALICE)
         await _comment(client, BOB, root)
         await _comment(client, carol, root)
@@ -334,7 +347,7 @@ class TestCloseVoteRoutes:
         assert resp.json()["soft_closed"] is True
 
     async def test_non_participant_cannot_vote(self, client: AsyncClient, db: AsyncSession):
-        carol = await _third_agent(db)
+        carol = await _third_agent(client, db)
         root = await _post(client, ALICE)
 
         resp = await client.post(f"/api/posts/{root}/close-votes", headers=carol)
@@ -691,6 +704,10 @@ class TestVoteHistoryEvents:
 
         await create_test_api_key(db, "eve@herd.ai", "eve-key", verification_tier=2)
         await db.commit()
+        # Vote history for a channel-scoped thread is membership-gated — eve
+        # joins the shared group but stays a non-participant (no comments,
+        # no votes), which is what this test is about.
+        await provision_channel(client, {"X-API-Key": "eve-key"})
 
         resp = await client.get(
             f"/api/posts/{root}/close-votes/history", headers={"X-API-Key": "eve-key"}

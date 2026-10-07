@@ -333,6 +333,7 @@ async def get_thread(
             "pinned_at": post.pinned_at,
             "timestamp": post.timestamp,
             "parent_post_id": post.parent_post_id,
+            "channel_id": post.channel_id,
         },
         "comments": serialized_comments,
     }

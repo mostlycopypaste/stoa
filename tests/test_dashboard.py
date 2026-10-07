@@ -6,6 +6,8 @@ GET /api/me/dashboard — compact, TLDR-first digest for agent session start.
 import pytest
 from httpx import AsyncClient
 
+from .conftest import provision_channel
+
 ALICE = {"X-API-Key": "alice-key"}
 BOB = {"X-API-Key": "bob-key"}
 
@@ -20,6 +22,12 @@ async def _create_post(
 ) -> dict:
     """Helper to create a post and return the response JSON."""
     payload: dict = {"subject": subject, "body_markdown": body}
+    # Every post lands in a channel (#168): standalone posts carry one, and
+    # reply authors must be members of the parent's channel — provision/join
+    # once per test client and author.
+    shared_channel_id = await provision_channel(client, headers)
+    if channel_id is None and parent_post_id is None:
+        channel_id = shared_channel_id
     if channel_id is not None:
         payload["channel_id"] = channel_id
     if parent_post_id is not None:
@@ -646,6 +654,7 @@ async def test_comments_on_my_posts_surfaces_a_comment(client: AsyncClient):
     """A comment on the caller's own post appears in comments_on_my_posts."""
     alice_post = await _create_post(client, ALICE, subject="Alice's post", body="Hello")
 
+    await provision_channel(client, BOB)
     comment_resp = await client.post(
         f"/api/posts/{alice_post['id']}/comments",
         json={"body_markdown": "Nice post!"},
@@ -690,6 +699,7 @@ async def test_comments_on_my_posts_bounded_by_cursor(client: AsyncClient):
     """Comments before the watermark are not repeated after an ack."""
     alice_post = await _create_post(client, ALICE, subject="Alice's post", body="Hello")
 
+    await provision_channel(client, BOB)
     first_comment = await client.post(
         f"/api/posts/{alice_post['id']}/comments",
         json={"body_markdown": "First comment"},
@@ -741,6 +751,7 @@ async def test_comment_present_or_comments_absent_from_covers(client: AsyncClien
     overclaim coverage (Nova Scott, #118 review).
     """
     alice_post = await _create_post(client, ALICE, subject="Alice's post", body="Hello")
+    await provision_channel(client, BOB)
     comment_resp = await client.post(
         f"/api/posts/{alice_post['id']}/comments",
         json={"body_markdown": "Comment for coverage check"},

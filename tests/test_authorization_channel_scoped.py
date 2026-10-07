@@ -8,6 +8,10 @@ endpoints fixed in PR #45.  Unscoped posts remain public.
 import pytest
 from httpx import AsyncClient
 
+from stoa.models import Post
+
+from .conftest import TestSession
+
 ALICE_HEADERS = {"X-API-Key": "alice-key"}
 BOB_HEADERS = {"X-API-Key": "bob-key"}
 
@@ -25,6 +29,29 @@ async def _alice_group_channel(client: AsyncClient) -> tuple[int, int]:
     resp = await client.get(f"/api/groups/{group_id}/channels", headers=ALICE_HEADERS)
     assert resp.status_code == 200
     return group_id, resp.json()[0]["id"]
+
+
+async def _legacy_unscoped_post() -> int:
+    """Insert a channel-less post directly (issue #168).
+
+    Creation no longer allows channel-less posts — the write path fails
+    closed — but legacy rows still exist and the read/comment gates still
+    deliberately skip them, so pin that behavior with a direct DB insert
+    instead of the (now rejected) API path.
+    """
+    async with TestSession() as session:
+        post = Post(
+            author="alice@herd.ai",
+            subject="Public post",
+            tldr="Everyone can read this.",
+            body_markdown="Everyone can read this.",
+            body_html="<p>Everyone can read this.</p>",
+            token_cost=6,
+            channel_id=None,
+        )
+        session.add(post)
+        await session.commit()
+        return post.id
 
 
 # ---------------------------------------------------------------------------
@@ -118,13 +145,7 @@ async def test_member_can_get_channel_scoped_post(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_unscoped_post_remains_public(client: AsyncClient):
     """Regression: unscoped posts (no channel_id) must remain publicly readable."""
-    resp = await client.post(
-        "/api/posts",
-        json={"subject": "Public post", "body_markdown": "Everyone can read this."},
-        headers=ALICE_HEADERS,
-    )
-    assert resp.status_code == 201
-    post_id = resp.json()["id"]
+    post_id = await _legacy_unscoped_post()
 
     resp = await client.get(f"/api/posts/{post_id}", headers=BOB_HEADERS)
     assert resp.status_code == 200
@@ -190,13 +211,7 @@ async def test_member_can_comment_on_channel_scoped_post(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_unscoped_post_comment_remains_public(client: AsyncClient):
     """Regression: commenting on unscoped posts remains open to all."""
-    resp = await client.post(
-        "/api/posts",
-        json={"subject": "Public post", "body_markdown": "Everyone can read this."},
-        headers=ALICE_HEADERS,
-    )
-    assert resp.status_code == 201
-    post_id = resp.json()["id"]
+    post_id = await _legacy_unscoped_post()
 
     resp = await client.post(
         f"/api/posts/{post_id}/comments",
@@ -271,13 +286,7 @@ async def test_member_can_list_channel_scoped_comments(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_unscoped_post_comments_remain_public(client: AsyncClient):
     """Regression: Bob can read Alice's comments on an unscoped post."""
-    resp = await client.post(
-        "/api/posts",
-        json={"subject": "Public post", "body_markdown": "Everyone can read this."},
-        headers=ALICE_HEADERS,
-    )
-    assert resp.status_code == 201
-    post_id = resp.json()["id"]
+    post_id = await _legacy_unscoped_post()
 
     resp = await client.post(
         f"/api/posts/{post_id}/comments",

@@ -13,6 +13,8 @@ Covers:
 
 from httpx import AsyncClient
 
+from .conftest import provision_channel
+
 ALICE_HEADERS = {"X-API-Key": "alice-key"}
 BOB_HEADERS = {"X-API-Key": "bob-key"}
 
@@ -21,9 +23,10 @@ async def _create_post(
     client: AsyncClient, subject: str = "Test Post", body: str = "Test body"
 ) -> int:
     """Create a post as Alice and return its id."""
+    channel_id = await provision_channel(client, ALICE_HEADERS)
     resp = await client.post(
         "/api/posts",
-        json={"subject": subject, "body_markdown": body},
+        json={"subject": subject, "body_markdown": body, "channel_id": channel_id},
         headers=ALICE_HEADERS,
     )
     assert resp.status_code == 201
@@ -316,10 +319,11 @@ class TestMove:
         # Alice creates a group+channel
         _, channel_id = await _create_group_and_channel(client, "Alice's Group")
 
-        # Bob creates a post (no channel)
+        # Bob creates a post in a channel he can post to
+        bob_channel = await provision_channel(client, BOB_HEADERS)
         resp = await client.post(
             "/api/posts",
-            json={"subject": "Bob Move", "body_markdown": "Body"},
+            json={"subject": "Bob Move", "body_markdown": "Body", "channel_id": bob_channel},
             headers=BOB_HEADERS,
         )
         post_id = resp.json()["id"]

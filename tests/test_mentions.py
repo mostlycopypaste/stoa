@@ -4,6 +4,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 
 from stoa.models import Agent, Mention
+from tests.conftest import provision_channel
 from tests.helpers import create_test_api_key
 
 ALICE = {"X-API-Key": "alice-key"}
@@ -117,6 +118,7 @@ class TestPostMentions:
             json={
                 "subject": "Mentioning Alice",
                 "body_markdown": "Hey @Alice, what do you think?",
+                "channel_id": await provision_channel(client, BOB),
             },
             headers=BOB,
         )
@@ -136,7 +138,11 @@ class TestPostMentions:
         """Creating a post without mentions creates no Mention records."""
         resp = await client.post(
             "/api/posts",
-            json={"subject": "No mentions", "body_markdown": "Just a regular post."},
+            json={
+                "subject": "No mentions",
+                "body_markdown": "Just a regular post.",
+                "channel_id": await provision_channel(client, ALICE),
+            },
             headers=ALICE,
         )
         assert resp.status_code == 201
@@ -152,6 +158,7 @@ class TestPostMentions:
             json={
                 "subject": "Ghost mention",
                 "body_markdown": "Hey @ghost, are you there?",
+                "channel_id": await provision_channel(client, ALICE),
             },
             headers=ALICE,
         )
@@ -188,6 +195,7 @@ class TestPostMentions:
             json={
                 "subject": "Team meeting",
                 "body_markdown": "@Alice @Bob @Charlie, let's sync up.",
+                "channel_id": await provision_channel(client, ALICE),
             },
             headers=ALICE,
         )
@@ -213,6 +221,7 @@ class TestPostMentions:
             json={
                 "subject": "Email mention",
                 "body_markdown": "Cc @bob@herd.ai for awareness.",
+                "channel_id": await provision_channel(client, ALICE),
             },
             headers=ALICE,
         )
@@ -243,12 +252,17 @@ class TestCommentMentions:
         # Create a post first.
         post_resp = await client.post(
             "/api/posts",
-            json={"subject": "Test post", "body_markdown": "Body"},
+            json={
+                "subject": "Test post",
+                "body_markdown": "Body",
+                "channel_id": await provision_channel(client, ALICE),
+            },
             headers=ALICE,
         )
         post_id = post_resp.json()["id"]
 
         # Comment mentioning Alice.
+        await provision_channel(client, BOB)
         resp = await client.post(
             f"/api/posts/{post_id}/comments",
             json={"body_markdown": "@Alice, what's your take?"},
@@ -269,11 +283,16 @@ class TestCommentMentions:
         """Comment without mention creates no Mention records."""
         post_resp = await client.post(
             "/api/posts",
-            json={"subject": "Test post", "body_markdown": "Body"},
+            json={
+                "subject": "Test post",
+                "body_markdown": "Body",
+                "channel_id": await provision_channel(client, ALICE),
+            },
             headers=ALICE,
         )
         post_id = post_resp.json()["id"]
 
+        await provision_channel(client, BOB)
         resp = await client.post(
             f"/api/posts/{post_id}/comments",
             json={"body_markdown": "Just a comment, no mentions."},
@@ -303,6 +322,7 @@ class TestMentionEndpoints:
             json={
                 "subject": "For Alice",
                 "body_markdown": "@Alice, please review this.",
+                "channel_id": await provision_channel(client, BOB),
             },
             headers=BOB,
         )
@@ -340,14 +360,22 @@ class TestMentionEndpoints:
         # Bob mentions Alice in a post.
         await client.post(
             "/api/posts",
-            json={"subject": "M1", "body_markdown": "@Alice, first mention."},
+            json={
+                "subject": "M1",
+                "body_markdown": "@Alice, first mention.",
+                "channel_id": await provision_channel(client, BOB),
+            },
             headers=BOB,
         )
 
         # Bob mentions Alice in another post.
         await client.post(
             "/api/posts",
-            json={"subject": "M2", "body_markdown": "@Alice, second mention."},
+            json={
+                "subject": "M2",
+                "body_markdown": "@Alice, second mention.",
+                "channel_id": await provision_channel(client, BOB),
+            },
             headers=BOB,
         )
 
@@ -366,7 +394,11 @@ class TestMentionEndpoints:
         # Bob mentions Alice.
         await client.post(
             "/api/posts",
-            json={"subject": "For Alice", "body_markdown": "@Alice, hi!"},
+            json={
+                "subject": "For Alice",
+                "body_markdown": "@Alice, hi!",
+                "channel_id": await provision_channel(client, BOB),
+            },
             headers=BOB,
         )
 
@@ -397,7 +429,11 @@ class TestMentionEndpoints:
         for i in range(3):
             await client.post(
                 "/api/posts",
-                json={"subject": f"Post {i}", "body_markdown": f"@Alice, msg {i}"},
+                json={
+                    "subject": f"Post {i}",
+                    "body_markdown": f"@Alice, msg {i}",
+                    "channel_id": await provision_channel(client, BOB),
+                },
                 headers=BOB,
             )
 
@@ -435,7 +471,11 @@ class TestDashboardMentions:
         # Create a mention.
         await client.post(
             "/api/posts",
-            json={"subject": "Dashboard test", "body_markdown": "@Alice, dashboard!"},
+            json={
+                "subject": "Dashboard test",
+                "body_markdown": "@Alice, dashboard!",
+                "channel_id": await provision_channel(client, BOB),
+            },
             headers=BOB,
         )
 

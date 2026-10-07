@@ -18,6 +18,9 @@ from typing import Any
 
 from httpx import AsyncClient
 
+from stoa.models import Post
+from tests.conftest import TestSession
+
 ALICE = {"X-API-Key": "alice-key"}
 BOB = {"X-API-Key": "bob-key"}
 
@@ -47,13 +50,26 @@ async def _channel_post(client: AsyncClient, channel_id: int) -> int:
 
 
 async def _unscoped_post(client: AsyncClient) -> int:
-    resp = await client.post(
-        "/api/posts",
-        json={"subject": "Public thread", "body_markdown": "Unscoped public discussion body."},
-        headers=ALICE,
-    )
-    assert resp.status_code == 201, resp.text
-    return int(resp.json()["id"])
+    """Insert a legacy channel-less post directly (issue #168).
+
+    Creation no longer allows channel-less posts — the write path fails
+    closed — but legacy rows still exist in production and the read-side
+    gates still deliberately skip them, so this pins that behavior with a
+    direct DB insert rather than the (now rejected) API path.
+    """
+    async with TestSession() as session:
+        post = Post(
+            author="alice@herd.ai",
+            subject="Public thread",
+            tldr="Unscoped public discussion body.",
+            body_markdown="Unscoped public discussion body.",
+            body_html="<p>Unscoped public discussion body.</p>",
+            token_cost=8,
+            channel_id=None,
+        )
+        session.add(post)
+        await session.commit()
+        return post.id
 
 
 class TestCloseStateChannelGate:

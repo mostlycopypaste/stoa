@@ -2,6 +2,8 @@
 
 from httpx import AsyncClient
 
+from .conftest import provision_channel
+
 ALICE = {"X-API-Key": "alice-key"}
 BOB = {"X-API-Key": "bob-key"}
 
@@ -10,10 +12,15 @@ class TestReadTracking:
     async def test_reading_post_records_tokens(self, client: AsyncClient) -> None:
         resp = await client.post(
             "/api/posts",
-            json={"subject": "Track Me", "body_markdown": "Some content to track"},
+            json={
+                "subject": "Track Me",
+                "body_markdown": "Some content to track",
+                "channel_id": await provision_channel(client, ALICE),
+            },
             headers=ALICE,
         )
         post_id = resp.json()["id"]
+        await provision_channel(client, BOB)
         await client.get(f"/api/posts/{post_id}", headers=BOB)
         usage = (await client.get("/api/usage/me", headers=BOB)).json()
         assert usage["posts_read"] == 1
@@ -22,10 +29,15 @@ class TestReadTracking:
     async def test_repeated_reads_not_double_counted(self, client: AsyncClient) -> None:
         resp = await client.post(
             "/api/posts",
-            json={"subject": "Read Twice", "body_markdown": "Only count once"},
+            json={
+                "subject": "Read Twice",
+                "body_markdown": "Only count once",
+                "channel_id": await provision_channel(client, ALICE),
+            },
             headers=ALICE,
         )
         post_id = resp.json()["id"]
+        await provision_channel(client, BOB)
         await client.get(f"/api/posts/{post_id}", headers=BOB)
         await client.get(f"/api/posts/{post_id}", headers=BOB)
         usage = (await client.get("/api/usage/me", headers=BOB)).json()
@@ -34,7 +46,11 @@ class TestReadTracking:
     async def test_author_reading_own_post_tracked(self, client: AsyncClient) -> None:
         resp = await client.post(
             "/api/posts",
-            json={"subject": "My Post", "body_markdown": "I wrote this"},
+            json={
+                "subject": "My Post",
+                "body_markdown": "I wrote this",
+                "channel_id": await provision_channel(client, ALICE),
+            },
             headers=ALICE,
         )
         post_id = resp.json()["id"]
@@ -52,10 +68,16 @@ class TestMyUsage:
         assert usage["last_read_at"] is None
 
     async def test_accumulates_across_posts(self, client: AsyncClient) -> None:
+        channel_id = await provision_channel(client, ALICE)
+        await provision_channel(client, BOB)
         for i in range(3):
             resp = await client.post(
                 "/api/posts",
-                json={"subject": f"Post {i}", "body_markdown": f"Content for post {i}"},
+                json={
+                    "subject": f"Post {i}",
+                    "body_markdown": f"Content for post {i}",
+                    "channel_id": channel_id,
+                },
                 headers=ALICE,
             )
             post_id = resp.json()["id"]
@@ -73,11 +95,17 @@ class TestLeaderboard:
         assert resp.json() == []
 
     async def test_ranked_by_consumption(self, client: AsyncClient) -> None:
+        channel_id = await provision_channel(client, ALICE)
+        await provision_channel(client, BOB)
         ids = []
         for i in range(3):
             resp = await client.post(
                 "/api/posts",
-                json={"subject": f"Post {i}", "body_markdown": f"Content number {i}"},
+                json={
+                    "subject": f"Post {i}",
+                    "body_markdown": f"Content number {i}",
+                    "channel_id": channel_id,
+                },
                 headers=ALICE,
             )
             ids.append(resp.json()["id"])

@@ -13,7 +13,7 @@ from stoa.main import app
 from stoa.models import AuditLog
 from stoa.routes.admin import require_admin
 
-from .conftest import TestSession
+from .conftest import TestSession, provision_channel
 
 ADMIN_KEY = "test-admin-secret-key-that-is-long-enough-for-validation"
 ADMIN_HEADERS = {"X-Admin-Key": ADMIN_KEY}
@@ -152,7 +152,11 @@ class TestSystemStats:
         )
         await admin_client.post(
             "/api/posts",
-            json={"subject": "Stats Test", "body_markdown": "Some content here"},
+            json={
+                "subject": "Stats Test",
+                "body_markdown": "Some content here",
+                "channel_id": await provision_channel(admin_client, {"X-API-Key": "alice-key"}),
+            },
             headers={"X-API-Key": "alice-key"},
         )
 

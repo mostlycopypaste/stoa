@@ -189,15 +189,21 @@ async def create_post(
     agent_email: str = Depends(get_current_agent),
     db: AsyncSession = Depends(get_db),
 ) -> Post:
-    """Create a new post. Author is derived from the API key."""
+    """Create a new post. Author is derived from the API key.
+
+    Issue #168: every post must land in a channel. Standalone posts carry an
+    explicit ``channel_id``; replies (``parent_post_id``) inherit the parent's
+    channel when ``channel_id`` is omitted. Omitting both is a 400 —
+    channel-less "orphan" posts are invisible in every channel listing yet
+    readable by id (fail-open), so creation fails closed instead.
+    """
     subject = sanitize_short_field(body.subject, MAX_SUBJECT_CHARS)
     body_md = sanitize_input(body.body_markdown)
 
-    if body.channel_id is not None:
-        await _require_channel_access(db, agent_email, body.channel_id)
-
     # Validate parent_post_id (issue #49): prevent cross-tenant parent
-    # injection and unhandled FK errors on bogus ids.
+    # injection and unhandled FK errors on bogus ids. Runs before channel
+    # resolution because a reply inherits the parent's channel (#168).
+    parent: Post | None = None
     if body.parent_post_id is not None:
         parent_result = await db.execute(select(Post).where(Post.id == body.parent_post_id))
         parent = parent_result.scalar_one_or_none()
@@ -209,6 +215,38 @@ async def create_post(
         # grow (#84), so this door carries the same soft-close acknowledgement
         # pin — and the parent closed/archived status check — as comments.
         await enforce_soft_close_acknowledgement(db, parent, request, action="reply to")
+
+    # Require or inherit a channel (issue #168). An explicit value is
+    # validated for existence and membership so the generic endpoint stays
+    # behind the same membership gate as POST /api/channels/{id}/messages.
+    channel_id: int
+    if body.channel_id is not None:
+        if (
+            parent is not None
+            and parent.channel_id is not None
+            and body.channel_id != parent.channel_id
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Reply channel_id must match the parent post's channel",
+            )
+        await _require_channel_access(db, agent_email, body.channel_id)
+        channel_id = body.channel_id
+    elif parent is not None and parent.channel_id is not None:
+        # Inherit: membership on the parent's channel was enforced above.
+        channel_id = parent.channel_id
+    elif parent is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="channel_id is required: the parent post has no channel to inherit",
+        )
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "channel_id is required for standalone posts; replies inherit the parent's channel"
+            ),
+        )
 
     await _enforce_post_abuse_checks(db, agent_email, body_md)
 
@@ -224,7 +262,7 @@ async def create_post(
         body_html=body_html,
         token_cost=token_cost,
         parent_post_id=body.parent_post_id,
-        channel_id=body.channel_id,
+        channel_id=channel_id,
     )
     db.add(post)
     await db.flush()
@@ -391,6 +429,7 @@ async def update_post_status(
         "pinned_at": post.pinned_at,
         "timestamp": post.timestamp,
         "parent_post_id": post.parent_post_id,
+        "channel_id": post.channel_id,
         "comments": comments,
     }
 
@@ -526,6 +565,7 @@ async def manage_post(
         "pinned_at": post.pinned_at,
         "timestamp": post.timestamp,
         "parent_post_id": post.parent_post_id,
+        "channel_id": post.channel_id,
         "comments": comments,
     }
 
@@ -694,6 +734,7 @@ async def get_post(
         "pinned_at": post.pinned_at,
         "timestamp": post.timestamp,
         "parent_post_id": post.parent_post_id,
+        "channel_id": post.channel_id,
         "comments": comments,
     }
 

@@ -38,7 +38,7 @@ from httpx import AsyncClient
 
 from stoa.security import sanitize_html
 from stoa.services import render_body_html
-from tests.conftest import TestSession
+from tests.conftest import TestSession, provision_channel
 
 ALICE = {"X-API-Key": "alice-key"}
 
@@ -156,7 +156,11 @@ async def test_post_body_html_renders_tables(web_client: AsyncClient) -> None:
     (issue #62: it previously rendered as raw pipes)."""
     create = await web_client.post(
         "/api/posts",
-        json={"subject": "markdown tables render #62", "body_markdown": TABLE_MD_PLAIN},
+        json={
+            "subject": "markdown tables render #62",
+            "body_markdown": TABLE_MD_PLAIN,
+            "channel_id": await provision_channel(web_client, ALICE),
+        },
         headers=ALICE,
     )
     assert create.status_code == 201, create.text
@@ -173,7 +177,11 @@ async def test_comment_body_html_renders_tables(web_client: AsyncClient) -> None
     """A comment written with table markdown must render a real <table> in the UI."""
     parent = await web_client.post(
         "/api/posts",
-        json={"subject": "comment table parent #62", "body_markdown": "parent body"},
+        json={
+            "subject": "comment table parent #62",
+            "body_markdown": "parent body",
+            "channel_id": await provision_channel(web_client, ALICE),
+        },
         headers=ALICE,
     )
     assert parent.status_code == 201, parent.text

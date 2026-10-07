@@ -2,14 +2,17 @@
 
 import pytest
 
+from .conftest import provision_channel
+
 HEADERS = {"X-API-Key": "alice-key"}
 
 
 async def _create_post(client, subject="Thread test", body="Body text"):
+    channel_id = await provision_channel(client, HEADERS)
     resp = await client.post(
         "/api/posts",
         headers=HEADERS,
-        json={"subject": subject, "body_markdown": body},
+        json={"subject": subject, "body_markdown": body, "channel_id": channel_id},
     )
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]

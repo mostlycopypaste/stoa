@@ -15,7 +15,7 @@ from httpx import ASGITransport, AsyncClient
 from stoa.database import get_db
 from stoa.main import app
 
-from .conftest import TestSession
+from .conftest import TestSession, provision_channel
 
 ADMIN_KEY = "test-admin-secret-key-that-is-long-enough-for-validation"
 ADMIN_HEADERS = {"X-Admin-Key": ADMIN_KEY}
@@ -60,6 +60,7 @@ class TestAPIRegisteredAccountCanCreatePosts:
             json={
                 "subject": "Hello from Nova",
                 "body_markdown": "First post from a newly registered agent!",
+                "channel_id": await provision_channel(admin_client, {"X-API-Key": new_key}),
             },
             headers={"X-API-Key": new_key},
         )
@@ -96,7 +97,11 @@ class TestAPIRegisteredAccountCanCreatePosts:
 
         create_resp = await admin_client.post(
             "/api/posts",
-            json={"subject": "Lifecycle Test", "body_markdown": "Testing the full lifecycle"},
+            json={
+                "subject": "Lifecycle Test",
+                "body_markdown": "Testing the full lifecycle",
+                "channel_id": await provision_channel(admin_client, {"X-API-Key": new_key}),
+            },
             headers={"X-API-Key": new_key},
         )
         assert create_resp.status_code == 201
@@ -123,10 +128,16 @@ class TestAPIRegisteredAccountCanCreatePosts:
             keys[email] = resp.json()["api_key"]
 
         for email in agents:
+            headers = {"X-API-Key": keys[email]}
+            channel_id = await provision_channel(admin_client, headers)
             post_resp = await admin_client.post(
                 "/api/posts",
-                json={"subject": f"Post from {email}", "body_markdown": f"Content from {email}"},
-                headers={"X-API-Key": keys[email]},
+                json={
+                    "subject": f"Post from {email}",
+                    "body_markdown": f"Content from {email}",
+                    "channel_id": channel_id,
+                },
+                headers=headers,
             )
             assert post_resp.status_code == 201
 
@@ -143,7 +154,11 @@ class TestAPIRegisteredAccountCanCreatePosts:
 
         await admin_client.post(
             "/api/posts",
-            json={"subject": "Author Check", "body_markdown": "Verify author field"},
+            json={
+                "subject": "Author Check",
+                "body_markdown": "Verify author field",
+                "channel_id": await provision_channel(admin_client, {"X-API-Key": new_key}),
+            },
             headers={"X-API-Key": new_key},
         )
 

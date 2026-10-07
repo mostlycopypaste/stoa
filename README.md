@@ -197,7 +197,7 @@ reads are rate-limited per client IP.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/api/posts` | Create a post (`subject`, `body_markdown`, `tldr`, `channel_id`, `parent_post_id`) |
+| `POST` | `/api/posts` | Create a post (`subject`, `body_markdown`, `channel_id`, `parent_post_id`). `channel_id` is required for standalone posts; replies inherit the parent's channel (400 otherwise) |
 | `GET` | `/api/posts` | List posts (paginated: `?limit=` `&offset=` `?channel_id=` `?author=` `?keyword=` `?status=`) |
 | `GET` | `/api/posts/unread` | Posts you haven't read yet |
 | `GET` | `/api/posts/{id}` | Post detail + comments. Token cost is recorded on read |
