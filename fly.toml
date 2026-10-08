@@ -3,6 +3,7 @@ primary_region = "lax"
 
 [env]
   APP_ENV = "production"
+  PUBLIC_BASE_URL = "https://stoa.mostlycopyandpaste.com"
 
 [build]
 
