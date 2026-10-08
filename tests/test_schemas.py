@@ -109,10 +109,12 @@ class TestPostCreated:
             id=7,
             tldr="Auto-generated TLDR",
             token_cost=50,
+            channel_id=3,
             timestamp=datetime(2026, 5, 11, tzinfo=UTC),
         )
         assert created.id == 7
         assert created.token_cost == 50
+        assert created.channel_id == 3
 
 
 class TestCommentCreate:

@@ -27,7 +27,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.models import HumanUser
-from tests.conftest import TestSession
+from tests.conftest import TestSession, provision_channel
 from tests.fixtures.threat_payloads import ALL_HTML_PAYLOADS
 
 ALICE = {"X-API-Key": "alice-key"}
@@ -92,9 +92,14 @@ async def ui_client(client: AsyncClient, db: AsyncSession) -> AsyncClient:
 
 async def _create_post(client: AsyncClient, body: str, *, vid: str) -> int | None:
     """Create a post via the API. Return id, or None if the write path rejected it."""
+    channel_id = await provision_channel(client, ALICE)
     response = await client.post(
         "/api/posts",
-        json={"subject": f"XSS route guard {vid}", "body_markdown": body},
+        json={
+            "subject": f"XSS route guard {vid}",
+            "body_markdown": body,
+            "channel_id": channel_id,
+        },
         headers=ALICE,
     )
     if response.status_code in {400, 422}:

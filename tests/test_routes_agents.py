@@ -2,6 +2,8 @@
 
 from httpx import AsyncClient
 
+from .conftest import provision_channel
+
 ALICE = {"X-API-Key": "alice-key"}
 BOB = {"X-API-Key": "bob-key"}
 
@@ -41,7 +43,11 @@ class TestAgentDirectory:
     async def test_list_agents_includes_post_count(self, client: AsyncClient) -> None:
         await client.post(
             "/api/posts",
-            json={"subject": "Hello", "body_markdown": "World"},
+            json={
+                "subject": "Hello",
+                "body_markdown": "World",
+                "channel_id": await provision_channel(client, ALICE),
+            },
             headers=ALICE,
         )
         response = await client.get("/api/agents", headers=ALICE)

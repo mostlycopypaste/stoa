@@ -11,7 +11,7 @@ from stoa.config import settings
 from stoa.models import AuditLog
 from stoa.services import assess_spam, body_fingerprint, count_links, count_mentions
 
-from .conftest import TestSession
+from .conftest import TestSession, provision_channel
 
 ALICE_HEADERS = {"X-API-Key": "alice-key"}
 
@@ -64,17 +64,26 @@ class TestPostVelocity:
         monkeypatch.setattr(settings, "post_rate_limit", 3)
         monkeypatch.setattr(settings, "post_rate_window_seconds", 3600)
 
+        channel_id = await provision_channel(client, ALICE_HEADERS)
         for i in range(3):
             r = await client.post(
                 "/api/posts",
-                json={"subject": f"S{i}", "body_markdown": f"unique body number {i}"},
+                json={
+                    "subject": f"S{i}",
+                    "body_markdown": f"unique body number {i}",
+                    "channel_id": channel_id,
+                },
                 headers=ALICE_HEADERS,
             )
             assert r.status_code == 201, r.text
 
         r = await client.post(
             "/api/posts",
-            json={"subject": "S4", "body_markdown": "unique body number four"},
+            json={
+                "subject": "S4",
+                "body_markdown": "unique body number four",
+                "channel_id": channel_id,
+            },
             headers=ALICE_HEADERS,
         )
         assert r.status_code == 429
@@ -95,14 +104,23 @@ class TestDuplicateDetection:
         self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(settings, "duplicate_window_seconds", 300)
-        payload = {"subject": "Dup", "body_markdown": "the exact same content here"}
+        channel_id = await provision_channel(client, ALICE_HEADERS)
+        payload = {
+            "subject": "Dup",
+            "body_markdown": "the exact same content here",
+            "channel_id": channel_id,
+        }
 
         r1 = await client.post("/api/posts", json=payload, headers=ALICE_HEADERS)
         assert r1.status_code == 201
 
         r2 = await client.post(
             "/api/posts",
-            json={"subject": "Dup again", "body_markdown": "the   Exact SAME content here"},
+            json={
+                "subject": "Dup again",
+                "body_markdown": "the   Exact SAME content here",
+                "channel_id": channel_id,
+            },
             headers=ALICE_HEADERS,
         )
         assert r2.status_code == 409
@@ -119,7 +137,11 @@ class TestDuplicateDetection:
         self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(settings, "duplicate_window_seconds", 0)
-        payload = {"subject": "Dup", "body_markdown": "repeatable body"}
+        payload = {
+            "subject": "Dup",
+            "body_markdown": "repeatable body",
+            "channel_id": await provision_channel(client, ALICE_HEADERS),
+        }
         r1 = await client.post("/api/posts", json=payload, headers=ALICE_HEADERS)
         r2 = await client.post("/api/posts", json=payload, headers=ALICE_HEADERS)
         assert r1.status_code == 201 and r2.status_code == 201
@@ -137,7 +159,11 @@ class TestSpamRoute:
         body = " ".join(f"https://x{i}.com" for i in range(5))
         r = await client.post(
             "/api/posts",
-            json={"subject": "Spam", "body_markdown": body},
+            json={
+                "subject": "Spam",
+                "body_markdown": body,
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         assert r.status_code == 422
@@ -155,7 +181,11 @@ class TestSpamRoute:
         body = " ".join(f"https://x{i}.com" for i in range(3))
         r = await client.post(
             "/api/posts",
-            json={"subject": "Flag", "body_markdown": body},
+            json={
+                "subject": "Flag",
+                "body_markdown": body,
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         assert r.status_code == 201

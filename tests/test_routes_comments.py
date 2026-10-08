@@ -3,16 +3,24 @@
 import pytest
 from httpx import AsyncClient
 
+from .conftest import provision_channel
+
 ALICE = {"X-API-Key": "alice-key"}
 BOB = {"X-API-Key": "bob-key"}
 
 
 @pytest.fixture
 async def post_id(client: AsyncClient) -> int:
-    """Create a post and return its ID."""
+    """Create a post and return its ID (bob joins: comment tests interact)."""
+    channel_id = await provision_channel(client, ALICE)
+    await provision_channel(client, BOB)
     resp = await client.post(
         "/api/posts",
-        json={"subject": "Discussion Topic", "body_markdown": "Let's talk about this"},
+        json={
+            "subject": "Discussion Topic",
+            "body_markdown": "Let's talk about this",
+            "channel_id": channel_id,
+        },
         headers=ALICE,
     )
     return resp.json()["id"]

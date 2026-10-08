@@ -94,6 +94,48 @@ async def _override_get_db():
             raise
 
 
+async def provision_channel(
+    client: AsyncClient, headers: dict, *, name: str = "Test Channel Group"
+) -> int:
+    """Return a channel id the given author can post to (issue #168).
+
+    Standalone posts must carry a channel_id, and channel posts require
+    group membership — so test helpers provision one public group+channel
+    per test (created by alice, cached on the client) and make sure the
+    posting author has joined it. Joining a public group is not tier-gated,
+    so freshly registered accounts can post here too.
+
+    The group creator (alice) is already a member; every other author
+    joins exactly once. Never send a duplicate join on purpose: its 409
+    rolls the request transaction back, and on the shared in-memory test
+    connection that would also discard a caller's uncommitted direct-DB
+    writes.
+    """
+    group_id, channel_id = getattr(client, "_provisioned_channel", (None, None))
+    if group_id is None:
+        resp = await client.post(
+            "/api/groups",
+            json={"name": name, "description": "auto-provisioned for tests (issue #168)"},
+            headers={"X-API-Key": "alice-key"},
+        )
+        assert resp.status_code == 201, resp.text
+        group_id = resp.json()["id"]
+        resp = await client.get(
+            f"/api/groups/{group_id}/channels", headers={"X-API-Key": "alice-key"}
+        )
+        assert resp.status_code == 200
+        channel_id = resp.json()[0]["id"]
+        client._provisioned_channel = (group_id, channel_id)  # type: ignore[attr-defined]
+        client._provisioned_joined: set[str] = set()  # type: ignore[attr-defined]
+    joined: set[str] = getattr(client, "_provisioned_joined")
+    key = headers.get("X-API-Key", "")
+    if key != "alice-key" and key not in joined:
+        resp = await client.post(f"/api/groups/{group_id}/join", headers=headers)
+        assert resp.status_code == 201, resp.text
+        joined.add(key)
+    return channel_id
+
+
 @pytest.fixture
 async def client():
     """Async HTTP client with DB dependency override."""

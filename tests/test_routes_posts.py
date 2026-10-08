@@ -6,7 +6,7 @@ from sqlalchemy import select
 from stoa.models import AuditLog, ReadLog
 from stoa.routes.posts import get_post
 
-from .conftest import TestSession
+from .conftest import TestSession, provision_channel
 
 ALICE_HEADERS = {"X-API-Key": "alice-key"}
 BOB_HEADERS = {"X-API-Key": "bob-key"}
@@ -16,7 +16,11 @@ class TestCreatePost:
     async def test_success(self, client: AsyncClient) -> None:
         response = await client.post(
             "/api/posts",
-            json={"subject": "Hello Herd", "body_markdown": "First post from Alice!"},
+            json={
+                "subject": "Hello Herd",
+                "body_markdown": "First post from Alice!",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         assert response.status_code == 201
@@ -51,7 +55,11 @@ class TestCreatePost:
     async def test_author_derived_from_api_key(self, client: AsyncClient) -> None:
         await client.post(
             "/api/posts",
-            json={"subject": "Test", "body_markdown": "Content"},
+            json={
+                "subject": "Test",
+                "body_markdown": "Content",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         response = await client.get("/api/posts", headers=ALICE_HEADERS)
@@ -62,7 +70,11 @@ class TestCreatePost:
         long_body = "word " * 200
         response = await client.post(
             "/api/posts",
-            json={"subject": "Long Post", "body_markdown": long_body},
+            json={
+                "subject": "Long Post",
+                "body_markdown": long_body,
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         assert response.status_code == 201
@@ -75,6 +87,7 @@ class TestCreatePost:
             json={
                 "subject": "XSS Test",
                 "body_markdown": '<script>alert("xss")</script>Safe content',
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
             },
             headers=ALICE_HEADERS,
         )
@@ -92,7 +105,11 @@ class TestListPosts:
     async def test_returns_summaries_without_body(self, client: AsyncClient) -> None:
         await client.post(
             "/api/posts",
-            json={"subject": "Post 1", "body_markdown": "Body of post 1"},
+            json={
+                "subject": "Post 1",
+                "body_markdown": "Body of post 1",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         response = await client.get("/api/posts", headers=ALICE_HEADERS)
@@ -104,12 +121,20 @@ class TestListPosts:
     async def test_filter_by_author(self, client: AsyncClient) -> None:
         await client.post(
             "/api/posts",
-            json={"subject": "Alice Post", "body_markdown": "By alice"},
+            json={
+                "subject": "Alice Post",
+                "body_markdown": "By alice",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         await client.post(
             "/api/posts",
-            json={"subject": "Bob Post", "body_markdown": "By bob"},
+            json={
+                "subject": "Bob Post",
+                "body_markdown": "By bob",
+                "channel_id": await provision_channel(client, BOB_HEADERS),
+            },
             headers=BOB_HEADERS,
         )
         response = await client.get("/api/posts?author=bob@herd.ai", headers=ALICE_HEADERS)
@@ -118,12 +143,20 @@ class TestListPosts:
     async def test_filter_by_keyword(self, client: AsyncClient) -> None:
         await client.post(
             "/api/posts",
-            json={"subject": "Python tips", "body_markdown": "Use type hints"},
+            json={
+                "subject": "Python tips",
+                "body_markdown": "Use type hints",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         await client.post(
             "/api/posts",
-            json={"subject": "Cooking", "body_markdown": "Make pasta"},
+            json={
+                "subject": "Cooking",
+                "body_markdown": "Make pasta",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         response = await client.get("/api/posts?keyword=Python", headers=ALICE_HEADERS)
@@ -133,7 +166,11 @@ class TestListPosts:
         for i in range(5):
             await client.post(
                 "/api/posts",
-                json={"subject": f"Post {i}", "body_markdown": f"Body {i}"},
+                json={
+                    "subject": f"Post {i}",
+                    "body_markdown": f"Body {i}",
+                    "channel_id": await provision_channel(client, ALICE_HEADERS),
+                },
                 headers=ALICE_HEADERS,
             )
         response = await client.get("/api/posts?limit=2&offset=2", headers=ALICE_HEADERS)
@@ -146,12 +183,20 @@ class TestListPosts:
     async def test_ordered_by_timestamp_desc(self, client: AsyncClient) -> None:
         await client.post(
             "/api/posts",
-            json={"subject": "First", "body_markdown": "First post"},
+            json={
+                "subject": "First",
+                "body_markdown": "First post",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         await client.post(
             "/api/posts",
-            json={"subject": "Second", "body_markdown": "Second post"},
+            json={
+                "subject": "Second",
+                "body_markdown": "Second post",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         response = await client.get("/api/posts", headers=ALICE_HEADERS)
@@ -164,7 +209,11 @@ class TestGetPost:
     async def test_success(self, client: AsyncClient) -> None:
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "Full Post", "body_markdown": "Read the **whole** thing"},
+            json={
+                "subject": "Full Post",
+                "body_markdown": "Read the **whole** thing",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
@@ -192,7 +241,11 @@ class TestGetPost:
         """
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "Repeat read", "body_markdown": "Read me more than once."},
+            json={
+                "subject": "Repeat read",
+                "body_markdown": "Read me more than once.",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
@@ -215,7 +268,11 @@ class TestReadStatus:
     async def test_unread_posts_show_read_false(self, client: AsyncClient) -> None:
         await client.post(
             "/api/posts",
-            json={"subject": "Unread Post", "body_markdown": "Haven't read this"},
+            json={
+                "subject": "Unread Post",
+                "body_markdown": "Haven't read this",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         response = await client.get("/api/posts", headers=BOB_HEADERS)
@@ -225,10 +282,15 @@ class TestReadStatus:
     async def test_read_posts_show_read_true(self, client: AsyncClient) -> None:
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "Will Read", "body_markdown": "Going to read this"},
+            json={
+                "subject": "Will Read",
+                "body_markdown": "Going to read this",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
+        await provision_channel(client, BOB_HEADERS)
         await client.get(f"/api/posts/{post_id}", headers=BOB_HEADERS)
         response = await client.get("/api/posts", headers=BOB_HEADERS)
         posts = response.json()["posts"]
@@ -237,7 +299,11 @@ class TestReadStatus:
     async def test_read_status_is_per_agent(self, client: AsyncClient) -> None:
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "Per Agent", "body_markdown": "Per-agent read status"},
+            json={
+                "subject": "Per Agent",
+                "body_markdown": "Per-agent read status",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
@@ -251,12 +317,20 @@ class TestUnreadEndpoint:
     async def test_all_unread_initially(self, client: AsyncClient) -> None:
         await client.post(
             "/api/posts",
-            json={"subject": "Post A", "body_markdown": "Content A"},
+            json={
+                "subject": "Post A",
+                "body_markdown": "Content A",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         await client.post(
             "/api/posts",
-            json={"subject": "Post B", "body_markdown": "Content B"},
+            json={
+                "subject": "Post B",
+                "body_markdown": "Content B",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         response = await client.get("/api/posts/unread", headers=BOB_HEADERS)
@@ -267,15 +341,24 @@ class TestUnreadEndpoint:
     async def test_read_posts_excluded(self, client: AsyncClient) -> None:
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "Read This", "body_markdown": "Will be read"},
+            json={
+                "subject": "Read This",
+                "body_markdown": "Will be read",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
         await client.post(
             "/api/posts",
-            json={"subject": "Skip This", "body_markdown": "Won't be read"},
+            json={
+                "subject": "Skip This",
+                "body_markdown": "Won't be read",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
+        await provision_channel(client, BOB_HEADERS)
         await client.get(f"/api/posts/{post_id}", headers=BOB_HEADERS)
         response = await client.get("/api/posts/unread", headers=BOB_HEADERS)
         data = response.json()
@@ -286,7 +369,11 @@ class TestUnreadEndpoint:
         for i in range(5):
             await client.post(
                 "/api/posts",
-                json={"subject": f"Post {i}", "body_markdown": f"Body {i}"},
+                json={
+                    "subject": f"Post {i}",
+                    "body_markdown": f"Body {i}",
+                    "channel_id": await provision_channel(client, ALICE_HEADERS),
+                },
                 headers=ALICE_HEADERS,
             )
         response = await client.get("/api/posts/unread?limit=2&offset=0", headers=BOB_HEADERS)
@@ -299,7 +386,11 @@ class TestDeletePost:
     async def test_author_can_delete(self, client: AsyncClient) -> None:
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "Delete Me", "body_markdown": "Temporary"},
+            json={
+                "subject": "Delete Me",
+                "body_markdown": "Temporary",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
@@ -312,7 +403,11 @@ class TestDeletePost:
     async def test_non_author_cannot_delete(self, client: AsyncClient) -> None:
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "Alice's Post", "body_markdown": "Mine"},
+            json={
+                "subject": "Alice's Post",
+                "body_markdown": "Mine",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
@@ -329,7 +424,11 @@ class TestUpdatePost:
         """Subject is frozen after creation (issue #54) — sending subject is ignored/rejected."""
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "Original Subject", "body_markdown": "Original body"},
+            json={
+                "subject": "Original Subject",
+                "body_markdown": "Original body",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
@@ -353,7 +452,11 @@ class TestUpdatePost:
     async def test_author_can_edit_body(self, client: AsyncClient) -> None:
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "Subject", "body_markdown": "Old body"},
+            json={
+                "subject": "Subject",
+                "body_markdown": "Old body",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
@@ -374,7 +477,11 @@ class TestUpdatePost:
     async def test_author_can_edit_both(self, client: AsyncClient) -> None:
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "Old Subject", "body_markdown": "Old body"},
+            json={
+                "subject": "Old Subject",
+                "body_markdown": "Old body",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
@@ -391,7 +498,11 @@ class TestUpdatePost:
     async def test_non_author_gets_403(self, client: AsyncClient) -> None:
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "Alice Post", "body_markdown": "Alice wrote this"},
+            json={
+                "subject": "Alice Post",
+                "body_markdown": "Alice wrote this",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
@@ -418,6 +529,7 @@ class TestUpdatePost:
             json={
                 "subject": "Original",
                 "body_markdown": "Keep this body",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
             },
             headers=ALICE_HEADERS,
         )
@@ -436,7 +548,11 @@ class TestUpdatePost:
     async def test_tldr_regenerated_on_body_update(self, client: AsyncClient) -> None:
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "TLDR Test", "body_markdown": "Short original"},
+            json={
+                "subject": "TLDR Test",
+                "body_markdown": "Short original",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
@@ -454,7 +570,11 @@ class TestUpdatePost:
     async def test_token_cost_recalculated(self, client: AsyncClient) -> None:
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "Cost Test", "body_markdown": "Short"},
+            json={
+                "subject": "Cost Test",
+                "body_markdown": "Short",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
@@ -470,11 +590,16 @@ class TestUpdatePost:
     async def test_comments_preserved(self, client: AsyncClient) -> None:
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "Post with comments", "body_markdown": "Original"},
+            json={
+                "subject": "Post with comments",
+                "body_markdown": "Original",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
 
+        await provision_channel(client, BOB_HEADERS)
         await client.post(
             f"/api/posts/{post_id}/comments",
             json={"body_markdown": "A comment"},
@@ -494,7 +619,11 @@ class TestUpdatePost:
     async def test_empty_body_rejected(self, client: AsyncClient) -> None:
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "Test", "body_markdown": "Body"},
+            json={
+                "subject": "Test",
+                "body_markdown": "Body",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
@@ -508,7 +637,11 @@ class TestUpdatePost:
     async def test_empty_put_body_rejected(self, client: AsyncClient) -> None:
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "Test", "body_markdown": "Body"},
+            json={
+                "subject": "Test",
+                "body_markdown": "Body",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
@@ -522,7 +655,11 @@ class TestUpdatePost:
     async def test_audit_log_created_on_edit(self, client: AsyncClient) -> None:
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "Audit Test", "body_markdown": "Body"},
+            json={
+                "subject": "Audit Test",
+                "body_markdown": "Body",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
@@ -544,7 +681,11 @@ class TestUpdatePost:
     async def test_audit_log_created_on_delete(self, client: AsyncClient) -> None:
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "Delete Audit", "body_markdown": "Body"},
+            json={
+                "subject": "Delete Audit",
+                "body_markdown": "Body",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
@@ -574,7 +715,11 @@ class TestTimestampTimezoneLabel:
     async def test_post_list_timestamp_includes_z_suffix(self, client: AsyncClient) -> None:
         await client.post(
             "/api/posts",
-            json={"subject": "TZ Post", "body_markdown": "Checking timestamp format"},
+            json={
+                "subject": "TZ Post",
+                "body_markdown": "Checking timestamp format",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         response = await client.get("/api/posts", headers=ALICE_HEADERS)
@@ -589,7 +734,11 @@ class TestTimestampTimezoneLabel:
     async def test_post_detail_timestamp_includes_z_suffix(self, client: AsyncClient) -> None:
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "TZ Detail", "body_markdown": "Checking detail timestamp"},
+            json={
+                "subject": "TZ Detail",
+                "body_markdown": "Checking detail timestamp",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]

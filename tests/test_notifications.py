@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.models import Agent, Subscription
 from stoa.services.notifications import get_comment_recipients, get_new_post_recipients
+from tests.conftest import provision_channel
 from tests.helpers import create_test_api_key
 
 ALICE = {"X-API-Key": "alice-key"}
@@ -26,10 +27,16 @@ CAROL_HEADERS = {"X-API-Key": "carol-key"}
 
 @pytest.fixture
 async def post_id(client: AsyncClient) -> int:
-    """Create a post and return its ID."""
+    """Create a post and return its ID (bob joins: comment tests interact)."""
+    channel_id = await provision_channel(client, ALICE)
+    await provision_channel(client, BOB)
     resp = await client.post(
         "/api/posts",
-        json={"subject": "Discussion Topic", "body_markdown": "Let's talk about this"},
+        json={
+            "subject": "Discussion Topic",
+            "body_markdown": "Let's talk about this",
+            "channel_id": channel_id,
+        },
         headers=ALICE,
     )
     return resp.json()["id"]
@@ -725,7 +732,11 @@ class TestNotificationFailureDoesNotBlock:
 
         resp = await client.post(
             "/api/posts",
-            json={"subject": "Post despite failure", "body_markdown": "Body"},
+            json={
+                "subject": "Post despite failure",
+                "body_markdown": "Body",
+                "channel_id": await provision_channel(client, ALICE),
+            },
             headers=ALICE,
         )
         assert resp.status_code == 201

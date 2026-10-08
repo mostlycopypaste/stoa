@@ -3,6 +3,8 @@
 import pytest
 from httpx import AsyncClient
 
+from .conftest import provision_channel
+
 ALICE_HEADERS = {"X-API-Key": "alice-key"}
 BOB_HEADERS = {"X-API-Key": "bob-key"}
 
@@ -12,7 +14,11 @@ class TestClosePost:
         """Author closing their own post → 200."""
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "Close Me", "body_markdown": "Please close this"},
+            json={
+                "subject": "Close Me",
+                "body_markdown": "Please close this",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
@@ -31,7 +37,11 @@ class TestClosePost:
         """Non-author (non-admin) closing a post → 403."""
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "Alice Only", "body_markdown": "Mine"},
+            json={
+                "subject": "Alice Only",
+                "body_markdown": "Mine",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
@@ -57,7 +67,11 @@ class TestClosePost:
         """Invalid status value → 422."""
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "Bad Status", "body_markdown": "Test"},
+            json={
+                "subject": "Bad Status",
+                "body_markdown": "Test",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
@@ -78,7 +92,11 @@ class TestClosePost:
 
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "Admin Close", "body_markdown": "Admin test"},
+            json={
+                "subject": "Admin Close",
+                "body_markdown": "Admin test",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
@@ -97,7 +115,11 @@ class TestReopenPost:
         """Author reopening a closed post → 200."""
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "Reopen Me", "body_markdown": "Reopen this"},
+            json={
+                "subject": "Reopen Me",
+                "body_markdown": "Reopen this",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
@@ -124,7 +146,11 @@ class TestClosedPostEnforcement:
         """PUT on a closed post → 409."""
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "Closed Edit", "body_markdown": "Original"},
+            json={
+                "subject": "Closed Edit",
+                "body_markdown": "Original",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
@@ -149,7 +175,11 @@ class TestClosedPostEnforcement:
         """POST comment on a closed post → 409."""
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "Closed Comment", "body_markdown": "Original"},
+            json={
+                "subject": "Closed Comment",
+                "body_markdown": "Original",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
@@ -162,6 +192,7 @@ class TestClosedPostEnforcement:
         )
 
         # Try to comment
+        await provision_channel(client, BOB_HEADERS)
         response = await client.post(
             f"/api/posts/{post_id}/comments",
             json={"body_markdown": "Can I comment?"},
@@ -174,7 +205,11 @@ class TestClosedPostEnforcement:
         """PUT on a reopened post → 200 (editing works again)."""
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "Reopen Edit", "body_markdown": "Original"},
+            json={
+                "subject": "Reopen Edit",
+                "body_markdown": "Original",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
@@ -205,7 +240,11 @@ class TestClosedPostEnforcement:
         """POST comment on a reopened post → 201 (commenting works again)."""
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "Reopen Comment", "body_markdown": "Original"},
+            json={
+                "subject": "Reopen Comment",
+                "body_markdown": "Original",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
@@ -225,6 +264,7 @@ class TestClosedPostEnforcement:
         )
 
         # Comment should work now
+        await provision_channel(client, BOB_HEADERS)
         response = await client.post(
             f"/api/posts/{post_id}/comments",
             json={"body_markdown": "Comment after reopen"},
@@ -240,7 +280,11 @@ class TestClosedPostVisibility:
         """Closed post should still appear in post list (with closed status)."""
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "Close Test", "body_markdown": "Will close"},
+            json={
+                "subject": "Close Test",
+                "body_markdown": "Will close",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
@@ -269,7 +313,11 @@ class TestStatusAuditLog:
 
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "Audit Test", "body_markdown": "Body"},
+            json={
+                "subject": "Audit Test",
+                "body_markdown": "Body",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
@@ -298,7 +346,11 @@ class TestStatusInResponses:
         """PostDetail should include status field."""
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "Status Check", "body_markdown": "Check status field"},
+            json={
+                "subject": "Status Check",
+                "body_markdown": "Check status field",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]
@@ -322,7 +374,11 @@ class TestStatusInResponses:
         """PostSummary should include status field."""
         create_resp = await client.post(
             "/api/posts",
-            json={"subject": "List Status", "body_markdown": "Check list"},
+            json={
+                "subject": "List Status",
+                "body_markdown": "Check list",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
             headers=ALICE_HEADERS,
         )
         post_id = create_resp.json()["id"]

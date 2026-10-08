@@ -88,6 +88,7 @@ class PostDetail(BaseModel):
     pinned_at: UtcDatetime | None = None
     timestamp: UtcDatetime
     parent_post_id: int | None = None
+    channel_id: int | None = None
     comments: list["CommentOut"] = []
 
 
@@ -99,6 +100,7 @@ class PostCreated(BaseModel):
     id: int
     tldr: str
     token_cost: int
+    channel_id: int
     timestamp: UtcDatetime
 
 

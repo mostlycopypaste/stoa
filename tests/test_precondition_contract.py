@@ -23,6 +23,8 @@ import itertools
 
 from httpx import AsyncClient
 
+from tests.conftest import provision_channel
+
 ALICE = {"X-API-Key": "alice-key"}
 BOB = {"X-API-Key": "bob-key"}
 
@@ -37,9 +39,15 @@ async def _post(
     parent_post_id: int | None = None,
 ) -> int:
     body = body or f"Body text for the post, unique marker {next(_unique)}."
+    # Every post lands in a channel (#168): standalone posts carry one, and
+    # reply authors must be members of the parent's channel — provision/join
+    # once per test client and author.
+    channel_id = await provision_channel(client, headers)
     payload: dict = {"subject": subject, "body_markdown": body}
     if parent_post_id is not None:
         payload["parent_post_id"] = parent_post_id
+    else:
+        payload["channel_id"] = channel_id
     resp = await client.post("/api/posts", json=payload, headers=headers)
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
@@ -55,6 +63,8 @@ async def _comment(
     """Post a comment; return (status_code, comment_id_or_0)."""
     body = body or f"A comment, unique marker {next(_unique)}."
     merged = {**headers, **(extra_headers or {})}
+    # Comments on channel-scoped posts require group membership (#168).
+    await provision_channel(client, merged)
     resp = await client.post(
         f"/api/posts/{post_id}/comments",
         json={"body_markdown": body},
@@ -84,6 +94,10 @@ async def _reply_post(
     channel_id: int | None = None,
 ) -> tuple[int, int]:
     """Create a reply-post via POST /api/posts; return (status, post_id_or_0)."""
+    # Replies inherit the parent's channel (#168): the author must be a
+    # member of that channel — provision/join so the ack gate stays the
+    # outcome under test, not a membership 403.
+    await provision_channel(client, {**headers, **(extra_headers or {})})
     payload: dict = {
         "subject": "Reply",
         "body_markdown": f"A reply-post, unique marker {next(_unique)}.",

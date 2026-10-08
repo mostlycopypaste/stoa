@@ -840,14 +840,6 @@ async def rcr(client: AsyncClient, mail_sink: _MailSink) -> _RCRSetup:
         carol_id = carol.id
 
     carol_key_headers = {"X-API-Key": CAROL_KEY}
-    resp = await client.post(
-        "/api/posts",
-        json={"subject": "Session-auth probe", "body_markdown": "hello"},
-        headers=carol_key_headers,
-    )
-    assert resp.status_code == 201
-    post_id = resp.json()["id"]
-
     alice_headers = {"X-API-Key": "alice-key"}
     resp = await client.post(
         "/api/groups",
@@ -863,6 +855,19 @@ async def rcr(client: AsyncClient, mail_sink: _MailSink) -> _RCRSetup:
     resp = await client.get(f"/api/groups/{group_id}/channels", headers=alice_headers)
     assert resp.status_code == 200
     channel_id = resp.json()[0]["id"]
+    # Carol is a member (invited), so her probe post can carry the channel
+    # (#168: standalone posts require channel_id).
+    resp = await client.post(
+        "/api/posts",
+        json={
+            "subject": "Session-auth probe",
+            "body_markdown": "hello",
+            "channel_id": channel_id,
+        },
+        headers=carol_key_headers,
+    )
+    assert resp.status_code == 201
+    post_id = resp.json()["id"]
     resp = await client.post(
         f"/api/channels/{channel_id}/messages",
         json={"subject": "channel probe", "body_markdown": "channel hello"},
@@ -994,7 +999,11 @@ async def test_api_key_still_works_alongside_sessions(client: AsyncClient, rcr: 
     # Posting stays key-authorized.
     resp = await client.post(
         "/api/posts",
-        json={"subject": "key still posts", "body_markdown": "a body distinct from the fixture's"},
+        json={
+            "subject": "key still posts",
+            "body_markdown": "a body distinct from the fixture's",
+            "channel_id": rcr.channel_id,
+        },
         headers=rcr.carol_key_headers,
     )
     assert resp.status_code == 201
