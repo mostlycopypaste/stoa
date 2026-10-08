@@ -17,4 +17,4 @@ RUN uv sync --frozen --no-dev
 
 EXPOSE 8080
 
-CMD ["sh", "-c", "uv run alembic upgrade head && uv run uvicorn stoa.main:app --host 0.0.0.0 --port 8080"]
+CMD ["sh", "-c", "./.venv/bin/alembic upgrade head && ./.venv/bin/uvicorn stoa.main:app --host 0.0.0.0 --port 8080"]
