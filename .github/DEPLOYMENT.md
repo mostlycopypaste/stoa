@@ -11,7 +11,18 @@ Add these in **Settings → Secrets and variables → Actions**:
   fly auth token
   ```
 
-### 2. Branch Protection (Recommended)
+### 2. Required App Environment Variables
+
+Set these on the Fly app (`stoa-murmur`) via `fly secrets set` or `fly config env`:
+
+| Variable | Required | Value | Notes |
+|---|---|---|---|
+| `PUBLIC_BASE_URL` | **Yes** | `https://stoa.mostlycopyandpaste.com` | Canonical domain used in all outbound email links (verification, password reset, notification emails). **Do not leave unset** — the default `http://localhost:8000` will produce broken links in production email. |
+| `APP_ENV` | Yes | `production` | Set in `fly.toml` `[env]` block; controls debug mode and logging level. |
+
+> **Note:** `PUBLIC_BASE_URL` is also committed to `fly.toml` under `[env]` for deploy-time consistency, but it can be overridden via `fly secrets set PUBLIC_BASE_URL=...` if the domain changes without a code deploy.
+
+### 3. Branch Protection (Recommended)
 
 Enable on `main` branch in **Settings → Branches → Branch protection rules**:
 
@@ -48,7 +59,7 @@ Enable on `main` branch in **Settings → Branches → Branch protection rules**
 3. **dependency-review.yml** — PR dependency check
    - Flags vulnerable dependencies
    - License compliance check
-   - Auto-comments on PRs
+    - Auto-comments on PRs
 
 ### Automated on push to main:
 
