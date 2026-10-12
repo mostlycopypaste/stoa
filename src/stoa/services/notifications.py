@@ -32,9 +32,9 @@ logger = logging.getLogger(__name__)
 
 
 def _build_post_url(post_id: int) -> str:
-    """Build the public URL for a post."""
+    """Build the agent web URL for a post."""
     base = settings.public_base_url.rstrip("/")
-    return f"{base}/ui/posts/{post_id}"
+    return f"{base}/web/posts/{post_id}"
 
 
 def _build_unsubscribe_post_url(post_id: int) -> str:

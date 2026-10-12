@@ -2,8 +2,13 @@
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import event
 
-from .conftest import provision_channel
+from stoa.models import AuditLog
+from stoa.routes.posts import update_post_status
+from stoa.schemas import PostStatusUpdate
+
+from .conftest import TestSession, provision_channel
 
 ALICE_HEADERS = {"X-API-Key": "alice-key"}
 BOB_HEADERS = {"X-API-Key": "bob-key"}
@@ -303,13 +308,61 @@ class TestClosedPostVisibility:
 
 
 class TestStatusAuditLog:
+    @pytest.mark.parametrize("status", ["closed", "open"], ids=["close", "reopen"])
+    async def test_status_change_sets_tz_naive_audit_timestamp(
+        self, client: AsyncClient, status: str
+    ) -> None:
+        """Inspect the pending audit row before SQLite can normalize its timestamp."""
+        create_resp = await client.post(
+            "/api/posts",
+            json={
+                "subject": "Audit timestamp",
+                "body_markdown": "Close and reopen timestamp regression.",
+                "channel_id": await provision_channel(client, ALICE_HEADERS),
+            },
+            headers=ALICE_HEADERS,
+        )
+        assert create_resp.status_code == 201
+        post_id = create_resp.json()["id"]
+        if status == "open":
+            response = await client.patch(
+                f"/api/posts/{post_id}/status",
+                json={"status": "closed"},
+                headers=ALICE_HEADERS,
+            )
+            assert response.status_code == 200
+
+        async with TestSession() as db:
+            checked_timestamps = []
+
+            def assert_naive_audit_timestamp(session, flush_context, instances):
+                # Unlike repeat-read updates in session.dirty (#169), this
+                # insert lives in session.new. Do not query/flush/reload it.
+                pending_logs = [obj for obj in session.new if isinstance(obj, AuditLog)]
+                assert len(pending_logs) == 1, "expected exactly one pending AuditLog insert"
+                entry = pending_logs[0]
+                assert entry.event_type == "post_status_changed"
+                assert entry.timestamp.tzinfo is None
+                checked_timestamps.append(entry.timestamp)
+
+            event.listen(db.sync_session, "before_flush", assert_naive_audit_timestamp)
+            try:
+                result = await update_post_status(
+                    post_id=post_id,
+                    body=PostStatusUpdate(status=status),
+                    agent_email="alice@herd.ai",
+                    x_admin_key=None,
+                    db=db,
+                )
+            finally:
+                event.remove(db.sync_session, "before_flush", assert_naive_audit_timestamp)
+
+            assert len(checked_timestamps) == 1
+            assert result["status"] == status
+
     async def test_audit_log_on_status_change(self, client: AsyncClient) -> None:
         """Status change should create an audit_log entry."""
         from sqlalchemy import select
-
-        from stoa.models import AuditLog
-
-        from .conftest import TestSession
 
         create_resp = await client.post(
             "/api/posts",

@@ -400,7 +400,7 @@ async def update_post_status(
             event_type="post_status_changed",
             agent_email=agent_email,
             details=details,
-            timestamp=datetime.now(UTC),
+            timestamp=_utcnow_naive(),
         )
     )
 
