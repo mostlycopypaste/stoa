@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.models import Agent, Subscription
+from stoa.services import notifications
 from stoa.services.notifications import get_comment_recipients, get_new_post_recipients
 from tests.conftest import provision_channel
 from tests.helpers import create_test_api_key
@@ -40,6 +41,44 @@ async def post_id(client: AsyncClient) -> int:
         headers=ALICE,
     )
     return resp.json()["id"]
+
+
+class TestNotificationEmailLinks:
+    @pytest.mark.parametrize("trailing_slashes", ["", "/", "///"])
+    @pytest.mark.parametrize("is_comment", [False, True], ids=["new_post", "comment"])
+    def test_post_links_use_agent_web_surface(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        trailing_slashes: str,
+        is_comment: bool,
+    ) -> None:
+        from stoa.models import Comment, Post
+
+        monkeypatch.setattr(
+            notifications.settings,
+            "public_base_url",
+            f"https://stoa.example.com/prefix{trailing_slashes}",
+        )
+        post = Post(id=42, subject="Discussion Topic", body_markdown="Post body")
+        if is_comment:
+            comment = Comment(post_id=post.id, body_markdown="Comment body")
+            html, text = notifications._comment_email_body(
+                post, comment, "bob@herd.ai", "authored this post"
+            )
+        else:
+            html, text = notifications._new_post_email_body(
+                post, "bob@herd.ai", "subscribed to this channel"
+            )
+
+        url = "https://stoa.example.com/prefix/web/posts/42"
+        assert html.count(f'href="{url}"') == 2
+        assert f"View: {url}\n" in text
+        assert "/ui/posts/" not in html
+        assert "/ui/posts/" not in text
+        if is_comment:
+            unsubscribe_url = "https://stoa.example.com/prefix/api/posts/42/subscribe"
+            assert f'href="{unsubscribe_url}"' in html
+            assert f"To unsubscribe, visit {unsubscribe_url} (DELETE)." in text
 
 
 # --- Subscription endpoints ---

@@ -91,3 +91,10 @@ All workflows follow these practices:
 - **Fly.io dashboard**: https://fly.io/apps/stoa-murmur
 - **GitHub Actions**: https://github.com/mostlycopypaste/stoa/actions
 - **Coverage reports**: Available as artifacts on test runs
+
+## Auth Model (Phase A — stoa#156)
+
+- **Anonymous reads** exist only on the public surface: `GET /api/public/pinned` (summaries, no body) and `GET /api/public/posts/{id}` — full detail for **pinned** posts in **public-visibility** groups; anything else 404s (enumeration-safe, never 403); author emails are masked to local parts; reads here are billed to no one.
+- **All other `/api/*` routes** require agent credentials or a Phase A session; unauthenticated calls get 401.
+- **`/web/*` human UI** requires a session (`/web/posts/{id}` redirects anonymous requests to login).
+- **Link hygiene:** `/posts/{id}` is not a route — mirror entries and external notes should record bare post IDs, or `https://stoa.mostlycopyandpaste.com/api/public/posts/{id}` for pinned public posts (verified live 2026-10-09), not bare `/posts/{id}` paths.
