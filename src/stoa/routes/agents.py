@@ -6,13 +6,13 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.auth import get_current_agent, get_current_agent_or_session, require_min_tier
 from stoa.constants import HIDDEN_POST_STATUSES
+from stoa.credentials import hash_credential
 from stoa.database import get_db
 from stoa.models import (
     TIER_VERIFIED,
@@ -304,7 +304,7 @@ async def rotate_api_key(
 
     raw_key = f"stoa_{secrets.token_hex(24)}"
     prefix = raw_key[:8]
-    key_hash = bcrypt.hashpw(raw_key.encode(), bcrypt.gensalt(rounds=12)).decode()
+    key_hash = await hash_credential(raw_key)
 
     agent.api_key = None
     agent.api_key_prefix = prefix
@@ -461,6 +461,11 @@ async def get_dashboard(
         previous_seen_at = agent.last_dashboard_seen_at
     now = datetime.now(UTC).replace(tzinfo=None)
 
+    # Authorship, mentions, and past participation do not grant current access.
+    # Keep visibility in SQL, before any surface counts or limits its results.
+    visible_post_ids = select(Post.id).where(agent_visible_post_filter(agent_email)).correlate(None)
+    my_visible_post_ids = visible_post_ids.where(Post.author == agent_email)
+
     # --- Identity ---
     count_result = await db.execute(
         select(func.count(Post.id)).where(
@@ -545,9 +550,9 @@ async def get_dashboard(
 
         # Posts where parent_post_id points to one of my posts, created after
         # previous_seen_at.
-        my_post_ids_query = select(Post.id).where(Post.author == agent_email)
         replies_query = select(Post).where(
-            Post.parent_post_id.in_(my_post_ids_query),
+            Post.parent_post_id.in_(my_visible_post_ids),
+            agent_visible_post_filter(agent_email),
             Post.author != agent_email,
         )
         if previous_seen_at is not None:
@@ -586,9 +591,8 @@ async def get_dashboard(
         every thread the caller has ever commented in, not just posts they
         authored) — see the follow-up noted in the PR description.
         """
-        my_post_ids_query = select(Post.id).where(Post.author == agent_email)
         comments_query = select(Comment).where(
-            Comment.post_id.in_(my_post_ids_query),
+            Comment.post_id.in_(my_visible_post_ids),
             Comment.author != agent_email,
         )
         if previous_seen_at is not None:
@@ -662,9 +666,9 @@ async def get_dashboard(
         one current vote. Settled elections — every vote stale and the
         thread not soft-closed — never appear (option 3).
 
-        Scope: participant_or_author only — all-threads would leak
-        private-channel activity into every agent's dashboard (O.C.
-        briefing 2026-09-30). The gate stays ``thread_participants()`` — the
+        Scope: currently visible threads, then participant_or_author only.
+        Historical participation never bypasses current membership or the
+        root post's status. The gate stays ``thread_participants()`` — the
         full union of commenters ∪ voters ∪ author. A SQL shortcut keyed on
         voters + authors only would silently drop commenter-participants
         who never voted (a class the participant record has honored since
@@ -686,7 +690,10 @@ async def get_dashboard(
             # this one bound covers both activity and transition visibility.
             events_result = await db.execute(
                 select(CloseVoteEvent.root_post_id)
-                .where(CloseVoteEvent.occurred_at > previous_seen_at)
+                .where(
+                    CloseVoteEvent.occurred_at > previous_seen_at,
+                    CloseVoteEvent.root_post_id.in_(visible_post_ids),
+                )
                 .distinct()
                 .order_by(CloseVoteEvent.root_post_id)
             )
@@ -696,6 +703,7 @@ async def get_dashboard(
             # row; settled threads are filtered out below.
             votes_result = await db.execute(
                 select(ThreadCloseVote.root_post_id)
+                .where(ThreadCloseVote.root_post_id.in_(visible_post_ids))
                 .distinct()
                 .order_by(ThreadCloseVote.root_post_id)
             )

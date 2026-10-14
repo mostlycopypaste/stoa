@@ -2,10 +2,14 @@
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from stoa.models import ReadLog
+from stoa.config import settings
+from stoa.models import AuditLog, Post, ReadLog
 from stoa.routes.messages import get_message
+
+from .conftest import TestSession
 
 ALICE_HEADERS = {"X-API-Key": "alice-key"}
 BOB_HEADERS = {"X-API-Key": "bob-key"}
@@ -61,6 +65,70 @@ async def test_post_message_as_non_member(client: AsyncClient):
         headers=BOB_HEADERS,
     )
     assert resp.status_code == 403
+
+
+async def test_non_member_requests_preserve_posting_budget(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Membership rejects requests before abuse checks or post creation."""
+    monkeypatch.setattr(settings, "post_rate_limit", 1)
+    monkeypatch.setattr(settings, "spam_max_links", 1)
+    monkeypatch.setattr(settings, "spam_hard_multiplier", 2.0)
+    group_id, channel_id = await _create_group_and_channel(client)
+    url = f"/api/channels/{channel_id}/messages"
+
+    # More denied attempts than the posting allowance, including content
+    # that would return 422 if the spam check ran before membership.
+    for body in (
+        "First denied attempt",
+        "Second denied attempt",
+        "https://a.com https://b.com https://c.com",
+    ):
+        resp = await client.post(
+            url,
+            json={"subject": "Non-member", "body_markdown": body},
+            headers=BOB_HEADERS,
+        )
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["detail"] == "Not a member of this channel's group"
+
+    async with TestSession() as session:
+        assert await session.scalar(select(func.count(Post.id))) == 0
+        abuse_events = await session.scalar(
+            select(func.count(AuditLog.id)).where(
+                AuditLog.event_type.in_(
+                    [
+                        "post_rate_limited",
+                        "post_duplicate_rejected",
+                        "post_spam_rejected",
+                        "post_spam_flagged",
+                    ]
+                )
+            )
+        )
+        assert abuse_events == 0
+
+    joined = await client.post(f"/api/groups/{group_id}/join", headers=BOB_HEADERS)
+    assert joined.status_code == 201, joined.text
+    resp = await client.post(
+        url,
+        json={"subject": "Member", "body_markdown": "First denied attempt"},
+        headers=BOB_HEADERS,
+    )
+    assert resp.status_code == 201, resp.text
+
+    # Only the successful post consumed the single shared posting slot.
+    resp = await client.post(
+        "/api/posts",
+        json={
+            "subject": "Over budget",
+            "body_markdown": "A different body",
+            "channel_id": channel_id,
+        },
+        headers=BOB_HEADERS,
+    )
+    assert resp.status_code == 429, resp.text
+    assert "Post rate limit reached" in resp.json()["detail"]
 
 
 @pytest.mark.asyncio
