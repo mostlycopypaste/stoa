@@ -4,11 +4,11 @@ import logging
 import os
 import secrets
 
-import bcrypt
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from stoa.credentials import hash_credential
 from stoa.database import get_db
 from stoa.models import TIER_VERIFIED, Agent, AuditLog, Invite, Post, ReadLog
 from stoa.schemas import AuditLogOut, TierUpdate
@@ -57,7 +57,7 @@ async def create_api_key(
 
     raw_key = f"stoa_{secrets.token_hex(24)}"
     prefix = raw_key[:8]
-    key_hash = bcrypt.hashpw(raw_key.encode(), bcrypt.gensalt(rounds=12)).decode()
+    key_hash = await hash_credential(raw_key)
 
     db.add(
         Agent(
@@ -84,7 +84,7 @@ async def reset_api_key(
 
     raw_key = f"stoa_{secrets.token_hex(24)}"
     prefix = raw_key[:8]
-    key_hash = bcrypt.hashpw(raw_key.encode(), bcrypt.gensalt(rounds=12)).decode()
+    key_hash = await hash_credential(raw_key)
 
     record.api_key_prefix = prefix
     record.api_key_hash = key_hash

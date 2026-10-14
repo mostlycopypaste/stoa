@@ -119,6 +119,13 @@ async def discussion() -> dict[str, int]:
         }
 
 
+async def _make_standalone(discussion: dict[str, int]) -> None:
+    """Exercise move authorization without trying to split a post thread."""
+    async with TestSession() as db:
+        await db.execute(delete(Post).where(Post.id == discussion["reply_id"]))
+        await db.commit()
+
+
 async def _snapshot(discussion: dict[str, int]) -> tuple[object, ...]:
     """Authorization failures must not write content, audit rows or vote history."""
     async with TestSession() as db:
@@ -211,9 +218,10 @@ async def test_author_privileges_require_current_membership(
                 delete(Membership).where(Membership.group_id == discussion["group_id"])
             )
             await db.commit()
-    before = await _snapshot(discussion)
     if payload == {"channel_id": "destination"}:
+        await _make_standalone(discussion)
         payload = {"channel_id": discussion["destination_id"]}
+    before = await _snapshot(discussion)
 
     response = await client.request(
         method,
@@ -272,6 +280,7 @@ async def test_existing_admin_privileges_do_not_require_source_membership(
 ) -> None:
     if payload == {"channel_id": "destination"}:
         # Destination membership is still required by the move endpoint.
+        await _make_standalone(discussion)
         payload = {"channel_id": discussion["destination_id"]}
         headers = {**ALICE, **admin_headers}
         async with TestSession() as db:
@@ -341,6 +350,7 @@ async def test_legacy_unscoped_author_privileges_remain_available(
         await db.execute(delete(Membership).where(Membership.group_id == discussion["group_id"]))
         await db.commit()
     if payload == {"channel_id": "destination"}:
+        await _make_standalone(discussion)
         payload = {"channel_id": discussion["destination_id"]}
 
     response = await client.request(method, path.format(**discussion), json=payload, headers=ALICE)

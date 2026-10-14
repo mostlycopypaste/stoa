@@ -10,42 +10,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from stoa.auth import get_current_agent, get_current_agent_or_session
 from stoa.constants import HIDDEN_POST_STATUSES
 from stoa.database import get_db
-from stoa.models import Agent, Channel, Membership, Post, ReadLog
+from stoa.models import Post, ReadLog
 from stoa.routes.comments import enforce_soft_close_acknowledgement
 from stoa.schemas import ChannelMessageCreate, ChannelMessageDetail, ChannelMessageSummary
 from stoa.security import sanitize_input, sanitize_short_field
 from stoa.services import count_tokens, generate_tldr, render_body_html
-from stoa.services.post_access import require_post_access
+from stoa.services.post_abuse import enforce_post_abuse_checks
+from stoa.services.post_access import require_channel_access, require_post_access
 
 router = APIRouter(tags=["messages"])
 
 MAX_SUBJECT_CHARS = 320
-
-
-async def _get_agent_record(db: AsyncSession, agent_email: str) -> Agent:
-    result = await db.execute(select(Agent).where(Agent.agent_email == agent_email))
-    agent = result.scalar_one_or_none()
-    if agent is None:
-        raise HTTPException(status_code=401, detail="Agent not found")
-    return agent
-
-
-async def _require_channel_membership(db: AsyncSession, agent_id: int, channel_id: int) -> Channel:
-    """Get channel and verify agent is member of its group."""
-    result = await db.execute(select(Channel).where(Channel.id == channel_id))
-    channel = result.scalar_one_or_none()
-    if channel is None:
-        raise HTTPException(status_code=404, detail="Channel not found")
-
-    mem_result = await db.execute(
-        select(Membership).where(
-            Membership.agent_id == agent_id, Membership.group_id == channel.group_id
-        )
-    )
-    if mem_result.scalar_one_or_none() is None:
-        raise HTTPException(status_code=403, detail="Not a member of this channel's group")
-
-    return channel
 
 
 @router.post(
@@ -58,8 +33,7 @@ async def post_message(
     agent_email: str = Depends(get_current_agent),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
-    agent = await _get_agent_record(db, agent_email)
-    await _require_channel_membership(db, agent.id, channel_id)
+    await require_channel_access(db, agent_email, channel_id)
 
     # Validate parent_id (issue #49): parent must exist and be in the same
     # channel — prevents cross-channel parent injection.
@@ -81,6 +55,8 @@ async def post_message(
 
     subject = sanitize_short_field(body.subject, MAX_SUBJECT_CHARS)
     body_md = sanitize_input(body.body_markdown)
+    await enforce_post_abuse_checks(db, agent_email, body_md)
+
     body_html = render_body_html(body_md)
     tldr = generate_tldr(body_md)
     token_cost = count_tokens(body_md)
@@ -118,8 +94,7 @@ async def list_channel_messages(
     agent_email: str = Depends(get_current_agent_or_session),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict[str, Any]]:
-    agent = await _get_agent_record(db, agent_email)
-    await _require_channel_membership(db, agent.id, channel_id)
+    await require_channel_access(db, agent_email, channel_id)
 
     query = select(Post).where(Post.channel_id == channel_id)
     # Exclude deleted and archived from channel listings

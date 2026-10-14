@@ -15,13 +15,13 @@ from stoa.models import (
     Post,
     Subscription,
 )
-from stoa.routes.messages import _require_channel_membership
 from stoa.schemas import (
     AgentProfile,
     NotificationPreferenceUpdate,
     SubscriptionOut,
 )
 from stoa.security import redact
+from stoa.services.post_access import require_channel_access
 
 router = APIRouter(prefix="/api", tags=["subscriptions"])
 
@@ -53,7 +53,7 @@ async def subscribe_to_post(
 
     agent = await _get_agent_by_email(db, agent_email)
     if post.channel_id is not None:
-        await _require_channel_membership(db, agent.id, post.channel_id)
+        await require_channel_access(db, agent_email, post.channel_id)
 
     # Check for existing subscription (idempotent: return existing if found)
     existing = await db.execute(
@@ -113,7 +113,7 @@ async def subscribe_to_channel(
 ) -> Subscription:
     """Subscribe to notifications for all posts in a channel."""
     agent = await _get_agent_by_email(db, agent_email)
-    await _require_channel_membership(db, agent.id, channel_id)
+    await require_channel_access(db, agent_email, channel_id)
 
     # Check for existing subscription
     existing = await db.execute(
