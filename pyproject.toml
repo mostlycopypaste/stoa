@@ -21,7 +21,7 @@ dependencies = [
     "itsdangerous>=2.2.0",
     "email-validator>=2.1.0",
     "httpx>=0.28.0",
-    "idna>=3.15",
+    "idna>=3.20",
 ]
 
 [project.optional-dependencies]
