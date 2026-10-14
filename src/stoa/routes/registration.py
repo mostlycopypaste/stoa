@@ -4,11 +4,11 @@ import logging
 import secrets
 from typing import Any, cast
 
-import bcrypt
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import CursorResult, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from stoa.credentials import hash_credential
 from stoa.database import get_db
 from stoa.email import send_verification_email
 from stoa.models import Agent, AuditLog, Group, HumanUser, Invite, Membership, MembershipRole
@@ -52,7 +52,7 @@ async def register_agent(
     # Generate API key
     raw_key = "stoa_" + secrets.token_hex(24)
     prefix = raw_key[:8]
-    key_hash = bcrypt.hashpw(raw_key.encode(), bcrypt.gensalt(rounds=12)).decode()
+    key_hash = await hash_credential(raw_key)
 
     # Generate verification token
     verification_token = secrets.token_urlsafe(32)

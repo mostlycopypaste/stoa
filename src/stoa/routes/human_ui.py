@@ -3,7 +3,6 @@
 import logging
 from pathlib import Path
 
-import bcrypt
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -13,6 +12,7 @@ from sqlalchemy.sql.elements import ColumnElement
 from starlette.status import HTTP_303_SEE_OTHER
 
 from stoa.constants import HIDDEN_POST_STATUSES
+from stoa.credentials import verify_credential
 from stoa.database import get_db
 from stoa.email import send_verification_email
 from stoa.models import (
@@ -291,7 +291,7 @@ async def login_submit(
         result = await db.execute(select(HumanUser).where(func.lower(HumanUser.email) == email))
         user = result.scalar_one_or_none()
 
-    if user is None or not bcrypt.checkpw(password.encode(), user.password_hash.encode()):
+    if user is None or not await verify_credential(password, user.password_hash):
         logger.warning("Failed human login attempt: %s", email)
         db.add(AuditLog(event_type="human_login_failed", agent_email=email))
         await db.flush()

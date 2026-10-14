@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.auth import _authenticate_api_key, extract_api_credential
 from stoa.config import settings
+from stoa.credentials import credential_bytes
 from stoa.database import get_db
 from stoa.models import (
     CHALLENGE_PURPOSE_MINT,
@@ -123,7 +124,7 @@ async def _requester_is_agent(db: AsyncSession, request: Request, agent: Agent) 
     other credential — another agent's, or none — leaves the default TTL.
     """
     credential = _credential_from_headers(request)
-    if not credential:
+    if not credential or credential_bytes(credential) is None:
         return False
     key_agent = await _authenticate_api_key(db, credential)
     if key_agent is not None and key_agent.is_verified and key_agent.id == agent.id:

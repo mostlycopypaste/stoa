@@ -8,10 +8,6 @@ from sqlalchemy.orm import DeclarativeBase
 
 from stoa.config import settings
 
-connect_args: dict[str, bool] = {}
-if "asyncpg" in settings.database_url:
-    connect_args["ssl"] = False
-
 
 def build_engine_kwargs(connect_args: dict[str, bool]) -> dict[str, Any]:
     """Engine options that harden the pool against stale connections (#77).
@@ -36,7 +32,7 @@ def build_engine_kwargs(connect_args: dict[str, bool]) -> dict[str, Any]:
     return kwargs
 
 
-engine = create_async_engine(settings.database_url, **build_engine_kwargs(connect_args))
+engine = create_async_engine(settings.database_url, **build_engine_kwargs({}))
 async_session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 

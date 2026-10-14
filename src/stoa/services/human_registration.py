@@ -3,11 +3,11 @@
 import secrets
 from typing import Any, cast
 
-import bcrypt
 from pydantic import EmailStr, TypeAdapter, ValidationError
 from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from stoa.credentials import credential_bytes, hash_credential
 from stoa.models import AuditLog, HumanUser, Invite
 
 _email_adapter = TypeAdapter(EmailStr)
@@ -32,7 +32,7 @@ def normalize_human_email(email: str) -> str:
 
 def validate_human_password(password: str) -> None:
     """Apply the shared human-password constraints, including bcrypt's byte cap."""
-    if len(password) < 8 or len(password) > 128 or len(password.encode()) > 72:
+    if len(password) < 8 or credential_bytes(password) is None:
         raise HumanRegistrationError(
             "Password must be at least 8 characters and at most 72 bytes",
             status_code=422,
@@ -69,7 +69,7 @@ async def create_human_account(
         raise HumanRegistrationError("Invalid or already-used invite code", status_code=403)
 
     verification_token = secrets.token_urlsafe(32)
-    password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
+    password_hash = await hash_credential(password)
     record = HumanUser(
         email=normalized_email,
         password_hash=password_hash,

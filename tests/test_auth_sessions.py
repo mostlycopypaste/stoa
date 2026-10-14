@@ -738,6 +738,20 @@ async def test_ttl_extension_accepts_expired_session_credential(
     assert (rows[-1].expires_at - rows[-1].requested_at).total_seconds() == 7_200
 
 
+@pytest.mark.parametrize("credential", ["carol-ke" + "x" * 65, "é" * 37])
+async def test_oversized_credential_cannot_extend_challenge_ttl(
+    client: AsyncClient, mail_sink: _MailSink, carol_id: int, credential: str
+) -> None:
+    response = await client.post(
+        "/api/auth/challenge",
+        json={"agent_id": carol_id, "ttl_seconds": 86_400},
+        headers={"Authorization": f"Bearer {credential}".encode("latin-1")},
+    )
+    assert response.status_code == 202
+    rows = await _fetch_challenges(carol_id)
+    assert (rows[0].expires_at - rows[0].requested_at).total_seconds() == 600
+
+
 async def test_ttl_extension_clamped_to_configured_max(
     client: AsyncClient,
     mail_sink: _MailSink,
