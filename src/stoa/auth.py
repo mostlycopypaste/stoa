@@ -3,18 +3,21 @@
 import logging
 from collections.abc import Awaitable, Callable
 
-import bcrypt
 from fastapi import Depends, Header, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from stoa.credentials import credential_bytes, verify_credential
 from stoa.database import get_db
 from stoa.models import Agent
 from stoa.services.auth_sessions import authenticate_session_token
 
 logger = logging.getLogger(__name__)
 
-DUMMY_HASH = bcrypt.hashpw(b"dummy-key-for-timing-safety", bcrypt.gensalt(rounds=12))
+# Precomputed cost-12 hash of the public string "dummy-key-for-timing-safety".
+# Only used when no account matches, and _verify_key always returns False then.
+# nosemgrep: generic.secrets.security.detected-bcrypt-hash.detected-bcrypt-hash
+DUMMY_HASH = b"$2b$12$lD2SLGQ.HFv9fOJt7wgki.FTpvvruxA1giUjHjnHLrs6gGDbHyPd."
 
 
 def extract_api_credential(x_api_key: str | None, authorization: str | None) -> str | None:
@@ -28,25 +31,29 @@ def extract_api_credential(x_api_key: str | None, authorization: str | None) -> 
     return x_api_key or None
 
 
-def _verify_key(api_key: str, key_record: Agent | None) -> bool:
+async def _verify_key(api_key: str, key_record: Agent | None) -> bool:
     """Verify an API key against a record in constant time.
 
     If key_record is None, runs bcrypt against a dummy hash to prevent
     timing leakage that would reveal whether a prefix exists.
     """
+    encoded = credential_bytes(api_key)
+    if encoded is None:
+        return False
+
     if key_record is None:
-        bcrypt.checkpw(api_key.encode(), DUMMY_HASH)
+        await verify_credential(api_key, DUMMY_HASH)
         return False
 
     if key_record.api_key_hash:
-        return bcrypt.checkpw(api_key.encode(), key_record.api_key_hash.encode())
+        return await verify_credential(api_key, key_record.api_key_hash)
 
     # Legacy plaintext comparison (constant-time via hmac)
     import hmac
 
     if key_record.api_key is None:
         return False
-    return hmac.compare_digest(api_key, str(key_record.api_key))
+    return hmac.compare_digest(encoded, str(key_record.api_key).encode("utf-8"))
 
 
 async def _authenticate_api_key(db: AsyncSession, api_key: str) -> Agent | None:
@@ -56,19 +63,21 @@ async def _authenticate_api_key(db: AsyncSession, api_key: str) -> Agent | None:
     lookup -> per-candidate constant-time verify -> legacy plaintext
     fallback only when no hashed candidates matched the prefix.
     """
+    if credential_bytes(api_key) is None:
+        return None
     prefix = api_key[:8] if len(api_key) >= 8 else api_key
     result = await db.execute(select(Agent).where(Agent.api_key_prefix == prefix))
     candidates = result.scalars().all()
 
     for candidate in candidates:
-        if _verify_key(api_key, candidate):
+        if await _verify_key(api_key, candidate):
             return candidate
 
     # Fall back to legacy plaintext lookup
     if not candidates:
         result = await db.execute(select(Agent).where(Agent.api_key == api_key))
         key_record = result.scalar_one_or_none()
-        if _verify_key(api_key, key_record):
+        if await _verify_key(api_key, key_record):
             return key_record
     return None
 
@@ -93,7 +102,7 @@ async def get_current_agent(
     agent = await _authenticate_api_key(db, api_key)
     if agent is None:
         # No match — run dummy comparison for timing safety
-        _verify_key(api_key, None)
+        await _verify_key(api_key, None)
         logger.warning(  # nosemgrep
             "Auth failure: invalid API key (prefix=%s)", api_key[:4]
         )
@@ -131,6 +140,8 @@ async def get_current_agent_or_session(
 
     if not api_key:
         raise HTTPException(status_code=401, detail="Missing credentials")
+    if credential_bytes(api_key) is None:
+        raise HTTPException(status_code=401, detail="Invalid or missing credentials")
 
     agent = await _authenticate_api_key(db, api_key)
     if agent is not None:
@@ -144,7 +155,7 @@ async def get_current_agent_or_session(
 
     # No match — dummy comparison for timing hygiene, then reject. No token
     # material is logged (the credential may be a session token).
-    _verify_key(api_key, None)
+    await _verify_key(api_key, None)
     logger.warning(  # nosemgrep
         "Auth failure: invalid credential on session-capable route"
     )

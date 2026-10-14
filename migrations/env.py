@@ -1,13 +1,12 @@
 """Alembic async environment configuration for Stoa."""
 
 import asyncio
-import os
 from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
-from sqlalchemy.ext.asyncio import async_engine_from_config, create_async_engine
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from stoa.config import settings
 from stoa.database import Base
@@ -48,11 +47,7 @@ def do_run_migrations(connection: Connection) -> None:
 async def run_migrations_online() -> None:
     """Run migrations in 'online' mode using async engine."""
     url = settings.database_url
-    connect_args: dict[str, bool] = {}
-    if "asyncpg" in url:
-        connect_args["ssl"] = False
-
-    connectable = create_async_engine(url, connect_args=connect_args, poolclass=pool.NullPool)
+    connectable = create_async_engine(url, poolclass=pool.NullPool)
 
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)

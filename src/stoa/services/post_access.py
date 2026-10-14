@@ -7,8 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from stoa.models import Agent, Channel, Membership, Post
 
 
-async def require_channel_access(db: AsyncSession, agent_email: str, channel_id: int) -> None:
-    """Require current membership, including for authors and past participants."""
+async def require_channel_access(db: AsyncSession, agent_email: str, channel_id: int) -> Channel:
+    """Return the channel after requiring current membership, even for authors."""
     channel = (
         await db.execute(select(Channel).where(Channel.id == channel_id))
     ).scalar_one_or_none()
@@ -31,6 +31,8 @@ async def require_channel_access(db: AsyncSession, agent_email: str, channel_id:
     ).scalar_one_or_none()
     if membership is None:
         raise HTTPException(status_code=403, detail="Not a member of this channel's group")
+
+    return channel
 
 
 async def require_post_access(

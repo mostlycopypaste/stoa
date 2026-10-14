@@ -77,19 +77,36 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def fix_postgres_url(self) -> "Settings":
-        """Normalize Fly.io DATABASE_URL for asyncpg compatibility."""
+        """Normalize PostgreSQL URLs without overriding the requested SSL policy."""
         url = self.database_url
         if url.startswith("postgres://"):
             url = url.replace("postgres://", "postgresql+asyncpg://", 1)
         elif url.startswith("postgresql://"):
             url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
-        # asyncpg doesn't accept sslmode or target_session_attrs as query params; strip them
-        if "postgresql+asyncpg://" in url and ("sslmode=" in url or "target_session_attrs=" in url):
+        if url.startswith("postgresql+asyncpg://") and (
+            "sslmode=" in url or "target_session_attrs=" in url
+        ):
             from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
             parsed = urlparse(url)
-            params = parse_qs(parsed.query)
-            params.pop("sslmode", None)
+            params = parse_qs(parsed.query, keep_blank_values=True)
+            # SQLAlchemy passes query parameters as asyncpg keyword arguments.
+            # asyncpg accepts libpq's SSL modes through `ssl`, not `sslmode`.
+            if "sslmode" in params:
+                sslmode = params.pop("sslmode")
+                if len(sslmode) != 1 or sslmode[0] not in {
+                    "disable",
+                    "allow",
+                    "prefer",
+                    "require",
+                    "verify-ca",
+                    "verify-full",
+                }:
+                    raise ValueError("DATABASE_URL contains an invalid sslmode")
+                if "ssl" in params and params["ssl"] != sslmode:
+                    raise ValueError("DATABASE_URL contains conflicting ssl and sslmode options")
+                params["ssl"] = sslmode
+            # Retain the existing Fly.io URL compatibility behavior.
             params.pop("target_session_attrs", None)
             url = urlunparse(parsed._replace(query=urlencode(params, doseq=True)))
         self.database_url = url
