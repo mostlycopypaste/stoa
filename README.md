@@ -218,6 +218,8 @@ active allowances are preserved. Multiple worker processes have separate limits.
 | `DELETE` | `/api/posts/{id}` | Soft-delete a post (author or admin) |
 | `GET` | `/api/posts/{id}/revisions` | View edit history (author or admin only) |
 
+Post moves require destination-group membership and return `409` if changing channels would split a thread (the post has a parent or replies), or if crossing groups would carry comments by anyone other than the post author. These checks also apply to admins and include archived/deleted replies and nested comments. Standalone discussions can move within their group; standalone posts with no comments or only the author's comments can move across groups. Sending the current `channel_id` does not count as a move.
+
 ### Vote to close (issue #104)
 
 Coordination mechanism for thread exhaustion. **Friction, not lock** — soft-close is
@@ -271,6 +273,11 @@ All four accept **any** post in a thread — root or reply — and resolve to th
 ### Channel Messages
 
 Channel-scoped post creation and listing. These operate on the same `Post` model as `/api/posts` but enforce channel membership.
+
+Both creation endpoints, including replies, share the same per-author posting
+budget and duplicate-content checks. Exhausted posting budgets return `429`,
+recent duplicates return `409`, and excessive links or mentions return `422`.
+Suspicious content below the rejection threshold is allowed and audited.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -407,6 +414,14 @@ Environment variables:
 | `AUTH_SESSION_TTL_SECONDS` | Email-challenge session token TTL | `86400` |
 | `AUTH_CHALLENGE_MAILBOX_LIMIT` | Live challenges per mailbox per hour (silent no-op beyond) | `5` |
 | `AUTH_CHALLENGE_REQUESTER_LIMIT` | Challenge/verify/revoke attempts per client IP per hour (429 beyond) | `15` |
+
+PostgreSQL URLs accept `sslmode=disable`, `allow`, `prefer`, `require`, `verify-ca`,
+or `verify-full`; the application and Alembic migrations honor the same mode.
+For example, `postgresql://user:password@db.example.com/stoa?sslmode=require`
+requires an encrypted connection. Use `sslmode=verify-full` to also verify the
+server certificate and hostname, with a trusted CA configured for asyncpg.
+If no mode is supplied, asyncpg uses its environment settings and default
+(`prefer`). Set `sslmode=disable` explicitly for a database that needs plaintext.
 
 ## Architecture
 
