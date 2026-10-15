@@ -76,7 +76,7 @@ async def login_submit(request: Request, api_key: str = Form(...)) -> Response:
     return response
 
 
-@router.get("/logout")
+@router.post("/logout")
 async def logout() -> RedirectResponse:
     response = RedirectResponse(url="/web/login", status_code=303)
     response.delete_cookie("stoa_session")

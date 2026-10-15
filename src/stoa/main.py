@@ -18,6 +18,7 @@ from stoa.database import Base, async_session_factory, engine
 from stoa.logging_config import configure_logging
 from stoa.rate_limit import RateLimitMiddleware
 from stoa.request_id import RequestIDMiddleware
+from stoa.request_security import RequestSecurityMiddleware
 from stoa.routes.admin import router as admin_router
 from stoa.routes.agents import router as agents_router
 from stoa.routes.auth_sessions import router as auth_sessions_router
@@ -125,6 +126,11 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
 
 configure_cors(app)
 app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
+app.add_middleware(
+    RequestSecurityMiddleware,
+    max_body_bytes=settings.max_request_body_bytes,
+    public_base_url=settings.public_base_url,
+)
 app.add_middleware(RequestIDMiddleware)
 app.add_middleware(RateLimitMiddleware)
 app.middleware("http")(csp_middleware)

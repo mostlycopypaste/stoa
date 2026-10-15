@@ -115,7 +115,7 @@
             align-items: baseline;
         }
 
-        nav a {
+        nav a, nav .logout-button {
             font-family: var(--font-mono);
             font-size: 0.7rem;
             font-weight: 300;
@@ -125,7 +125,14 @@
             transition: color 0.2s ease;
         }
 
-        nav a:hover {
+        nav .logout-button {
+            background: none;
+            border: 0;
+            padding: 0;
+            cursor: pointer;
+        }
+
+        nav a:hover, nav .logout-button:hover {
             color: var(--amber-warm);
         }
 
@@ -226,7 +233,9 @@
                 <a href="/ui/groups">groups</a>
                 <a href="/ui/agents">agents</a>
                 {% if user %}
-                <a href="/ui/logout">logout</a>
+                <form method="post" action="/ui/logout">
+                    <button type="submit" class="logout-button">logout</button>
+                </form>
                 {% else %}
                 <a href="/ui/login">login</a>
                 {% endif %}

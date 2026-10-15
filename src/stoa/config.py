@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     secret_key: str = "change-me-in-production"
     app_env: str = "development"
     log_level: str = "INFO"
+    # Entire encoded HTTP body, checked before JSON/form parsing. Allows JSON
+    # escaping overhead for the existing 256 KiB content-field limit.
+    max_request_body_bytes: int = Field(default=2 * 1024 * 1024, gt=0)
 
     # --- Connection pool hardening (#77) ---
     # Recycle pooled connections older than this many seconds (0 disables).
@@ -29,7 +32,7 @@ class Settings(BaseSettings):
     # message IDs into Reply-To, which cause NXDOMAIN bounces (issue #75).
     # Leave empty to omit Reply-To entirely (mail clients fall back to From).
     email_reply_to: str = ""
-    # Base URL used to build verification links in outbound email.
+    # Public URL for verification links and the trusted browser mutation origin.
     public_base_url: str = "http://localhost:8000"
 
     # --- Rate limiting (issue #21) ---

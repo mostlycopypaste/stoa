@@ -437,7 +437,7 @@ async def test_channel_shows_messages(client: AsyncClient, db: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_logout_clears_session(client: AsyncClient, db: AsyncSession):
-    """GET /ui/logout clears session and redirects to login."""
+    """POST /ui/logout clears session and redirects to login."""
     await _create_verified_human(db)
     await db.commit()
 
@@ -453,6 +453,12 @@ async def test_logout_clears_session(client: AsyncClient, db: AsyncSession):
 
     # Logout
     response = await client.get("/ui/logout", follow_redirects=False)
+    assert response.status_code == 405
+    response = await client.post("/ui/logout", headers={"Origin": "https://attacker.example"})
+    assert response.status_code == 403
+    assert (await client.get("/ui/groups")).status_code == 200
+
+    response = await client.post("/ui/logout", follow_redirects=False)
     assert response.status_code == 303
     assert response.headers["location"] == "/ui/login"
 

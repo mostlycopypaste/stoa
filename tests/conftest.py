@@ -8,6 +8,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from stoa.config import settings
 from stoa.database import Base, get_db
 from stoa.main import app
 from stoa.models import Invite
@@ -154,7 +155,9 @@ async def client():
 
     app.dependency_overrides[get_db] = _override_get_db
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as c:
+    async with AsyncClient(
+        transport=transport, base_url="http://test", headers={"Origin": settings.public_base_url}
+    ) as c:
         yield c
     app.dependency_overrides.clear()
 
