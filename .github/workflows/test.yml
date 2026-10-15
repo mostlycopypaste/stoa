@@ -70,13 +70,13 @@ jobs:
           enable-cache: false
 
       - name: Install dependencies
-        run: uv sync --all-extras
+        run: uv sync --all-extras --no-install-project
 
       - name: Run pip-audit
         run: |
           set -euo pipefail
-          uv tool install pip-audit
-          uv run pip-audit --strict
+          uv pip install pip-audit
+          uv run --no-sync pip-audit --strict
 
   typecheck:
     name: Type check (mypy, py${{ matrix.python-version }})
