@@ -104,6 +104,8 @@ async def create_post(
     channel when ``channel_id`` is omitted. Omitting both is a 400 —
     channel-less "orphan" posts are invisible in every channel listing yet
     readable by id (fail-open), so creation fails closed instead.
+    Legacy unscoped threads must be assigned a consistent channel before
+    reply-post creation can resume.
     """
     subject = sanitize_short_field(body.subject, MAX_SUBJECT_CHARS)
     body_md = sanitize_input(body.body_markdown)
@@ -131,11 +133,9 @@ async def create_post(
     # behind the same membership gate as POST /api/channels/{id}/messages.
     channel_id: int
     if body.channel_id is not None:
-        if (
-            parent is not None
-            and parent.channel_id is not None
-            and body.channel_id != parent.channel_id
-        ):
+        # NULL is a distinct legacy audience, not permission to attach a
+        # channel-scoped reply. Repair the thread's channel before replying.
+        if parent is not None and body.channel_id != parent.channel_id:
             raise HTTPException(
                 status_code=400,
                 detail="Reply channel_id must match the parent post's channel",
@@ -148,7 +148,7 @@ async def create_post(
     elif parent is not None:
         raise HTTPException(
             status_code=400,
-            detail="channel_id is required: the parent post has no channel to inherit",
+            detail="Cannot reply to a parent post without a channel; repair the thread first",
         )
     else:
         raise HTTPException(
