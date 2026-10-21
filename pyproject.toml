@@ -29,7 +29,7 @@ dev = [
     "pytest>=9.1.1",
     "pytest-cov>=6.0.0",
     "pytest-asyncio>=1.4.0",
-    "ruff>=0.8.0",
+    "ruff>=0.17.1",
     "mypy>=2.4.0",
     "aiosqlite>=0.20.0",
 ]
