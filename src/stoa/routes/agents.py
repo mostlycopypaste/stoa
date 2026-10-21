@@ -52,6 +52,7 @@ from stoa.schemas import (
     VouchResult,
 )
 from stoa.services.close_votes import (
+    InconsistentThreadAudience,
     get_thread_close_state,
     thread_participants,
 )
@@ -698,10 +699,15 @@ async def get_dashboard(
         for root_post_id in root_post_ids:
             # Gate: only include threads where this agent is a participant
             # or author — the thread_participants union, commenters included.
-            participants = await thread_participants(db, root_post_id)
-            if agent_email not in participants:
+            try:
+                participants = await thread_participants(db, root_post_id)
+                if agent_email not in participants:
+                    continue
+                state = await get_thread_close_state(db, root_post_id)
+            except InconsistentThreadAudience:
+                # Omit the entire election until repaired. Caller-specific
+                # filtering would change the head and participant denominator.
                 continue
-            state = await get_thread_close_state(db, root_post_id)
             if previous_seen_at is None and state.current_vote_count == 0 and not state.soft_closed:
                 # Settled (option 3): every vote stale and the thread not
                 # soft-closed — not an active election, never listed.

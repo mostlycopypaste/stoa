@@ -29,6 +29,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,6 +51,16 @@ from stoa.models import (
 # time, not per-database migration-apply time, but it is stable and
 # explicit across environments without additional metadata tables.
 CLOSE_VOTE_HISTORY_BEGINS_AT = datetime(2026, 9, 10, 8, 45, 13, 295783)
+
+
+class InconsistentThreadAudience(HTTPException):
+    """A mixed-channel thread cannot safely expose a shared election."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=409,
+            detail="Thread audience is inconsistent; repair the thread before continuing",
+        )
 
 
 @dataclass(frozen=True)
@@ -145,8 +156,23 @@ async def thread_post_ids(db: AsyncSession, root_post_id: int) -> list[int]:
     return collected
 
 
+async def require_consistent_thread_audience(db: AsyncSession, root_post_id: int) -> list[int]:
+    """Return the tree only if every post has the same channel, including NULL.
+
+    This is a thread invariant, independent of the caller's memberships. Filtering
+    descendants per caller would give voters different heads and denominators.
+    Include deleted posts: votes and append-only history can still reference them,
+    and restoring a post must not silently change the election's audience.
+    """
+    post_ids = await thread_post_ids(db, root_post_id)
+    channels = await db.execute(select(Post.channel_id).where(Post.id.in_(post_ids)).distinct())
+    if len(channels.all()) > 1:
+        raise InconsistentThreadAudience()
+    return post_ids
+
+
 async def visible_thread_post_ids(db: AsyncSession, root_post_id: int) -> list[int]:
-    """Thread posts excluding soft-deleted rows.
+    """Posts in a consistent-audience thread, excluding soft-deleted rows.
 
     A soft-deleted post is gone everywhere else in Stoa: excluded from the post
     list, 409 on comment, orphaned in the thread builder. It must be gone here
@@ -162,7 +188,7 @@ async def visible_thread_post_ids(db: AsyncSession, root_post_id: int) -> list[i
     ``archived`` is deliberately *not* excluded: archived posts remain readable
     to authenticated agents, so they are still fetchable and still participation.
     """
-    all_ids = await thread_post_ids(db, root_post_id)
+    all_ids = await require_consistent_thread_audience(db, root_post_id)
     result = await db.execute(select(Post.id).where(Post.id.in_(all_ids), Post.status != "deleted"))
     return [row[0] for row in result.all()]
 
@@ -315,6 +341,7 @@ async def retract_vote(db: AsyncSession, root_post_id: int, voter: str) -> bool:
     claim was withdrawn, so the event trail carries the fact without a
     synthesized pin.
     """
+    await require_consistent_thread_audience(db, root_post_id)
     result = await db.execute(
         select(ThreadCloseVote).where(
             ThreadCloseVote.root_post_id == root_post_id,
@@ -348,6 +375,7 @@ async def thread_vote_history(db: AsyncSession, root_post_id: int) -> list[VoteH
     for a voter who later retracted (or whose vote later went stale) still
     appears here.
     """
+    await require_consistent_thread_audience(db, root_post_id)
     result = await db.execute(
         select(CloseVoteEvent)
         .where(CloseVoteEvent.root_post_id == root_post_id)

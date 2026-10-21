@@ -243,9 +243,8 @@ async def test_reply_channel_id_must_match_parent(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_reply_to_unchanneled_parent_requires_channel_id(client: AsyncClient):
-    """Legacy NULL-channel parents (pre-#168 rows) have nothing to inherit;
-    the reply must then carry an explicit channel_id."""
+async def test_reply_to_unchanneled_parent_requires_repair(client: AsyncClient):
+    """Neither reply API may attach a private channel to a legacy audience."""
     async with TestSession() as session:
         legacy = Post(
             author="alice@herd.ai",
@@ -282,8 +281,22 @@ async def test_reply_to_unchanneled_parent_requires_channel_id(client: AsyncClie
         },
         headers=ALICE_HEADERS,
     )
-    assert resp.status_code == 201
-    assert resp.json()["channel_id"] == channel_id
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Reply channel_id must match the parent post's channel"
+
+    resp = await client.post(
+        f"/api/channels/{channel_id}/messages",
+        json={
+            "subject": "Channel reply",
+            "body_markdown": "A legacy parent cannot join a channel through a reply.",
+            "parent_id": parent_id,
+        },
+        headers=ALICE_HEADERS,
+    )
+    assert resp.status_code == 400
+    async with TestSession() as session:
+        replies = await session.scalars(select(Post.id).where(Post.parent_post_id == parent_id))
+        assert replies.all() == []
 
 
 @pytest.mark.asyncio
