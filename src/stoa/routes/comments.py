@@ -30,6 +30,7 @@ async def enforce_soft_close_acknowledgement(
     db: AsyncSession,
     post: Post,
     request: Request,
+    agent_email: str,
     action: str = "comment on",
 ) -> ThreadCloseState | None:
     """Shared write gate for the thread *post* belongs to (issue #153).
@@ -39,7 +40,7 @@ async def enforce_soft_close_acknowledgement(
     (``parent_id``) — so the paths cannot drift apart again. Contract, per
     the #153 design ruling:
 
-    1. resolve *post* to its thread root;
+    1. resolve *post* to its thread root and require access to that root;
     2. reject writes into a closed/archived/deleted post — the hard-status
        door ``create_comment`` has always had, now uniform across all three
        paths *and* across depth: both the post handed in and its thread
@@ -58,8 +59,9 @@ async def enforce_soft_close_acknowledgement(
     soft-close, else None. Callers that report it (the #117 receipt) must use
     this value, not a re-read: the write about to happen stales every vote.
 
-    Membership/403 checks stay in the routes and must run *before* this
-    gate (settled Sept-12 ordering: no head-token oracle for non-members).
+    Routes must authorize the target before this gate. The gate also
+    authorizes its root before inspecting root status or close state: legacy
+    split threads can have a root in another group's channel (#198/#206).
 
     Cost note: every gated write resolves its thread root and recomputes
     close state — the same N-elections shape the dashboard surface carries.
@@ -73,10 +75,13 @@ async def enforce_soft_close_acknowledgement(
     # writes into a closed thread through (#155 review).
     statuses: list[str | None] = [post.status]
     if root_post_id != post.id:
-        root_status = (
-            await db.execute(select(Post.status).where(Post.id == root_post_id))
-        ).scalar_one_or_none()
-        statuses.append(root_status)
+        root = await db.get(Post, root_post_id)
+        if root is None:
+            raise HTTPException(status_code=404, detail="Post not found")
+        # Preserve the writer's existing 409 for deleted posts, but only
+        # after membership has been checked, just as for the target post.
+        await require_post_access(db, agent_email, root, include_deleted=True)
+        statuses.append(root.status)
     closed = next((s for s in statuses if s in ("closed", "archived", "deleted")), None)
     if closed:
         raise HTTPException(
@@ -136,7 +141,7 @@ async def create_comment(
     # soft-close acknowledgement pin, resolved at the thread root so
     # comments on reply-posts are gated too (#153 Gap 1), not just comments
     # on the root.
-    stepped_into = await enforce_soft_close_acknowledgement(db, post, request)
+    stepped_into = await enforce_soft_close_acknowledgement(db, post, request, agent_email)
 
     body_md = sanitize_input(body.body_markdown)
     body_html = render_body_html(body_md)

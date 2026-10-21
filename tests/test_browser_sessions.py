@@ -173,12 +173,15 @@ async def test_unverified_agent_cannot_log_in_or_supply_web_cookie(
 async def test_human_session_cookie_security(monkeypatch, human, app_env, secure) -> None:
     monkeypatch.setattr(main.settings, "app_env", app_env)
     monkeypatch.setattr(main.settings, "secret_key", "test-session-secret-" * 3)
+    monkeypatch.setattr(main.settings, "public_base_url", "https://test")
     # Build the real application with each environment without replacing the
     # shared app imported by the rest of the suite.
     configured_app = runpy.run_path(main.__file__)["app"]
     configured_app.dependency_overrides[get_db] = _override_get_db
     async with AsyncClient(
-        transport=ASGITransport(app=configured_app), base_url="https://test"
+        transport=ASGITransport(app=configured_app),
+        base_url="https://test",
+        headers={"Origin": "https://test"},
     ) as browser:
         login = await browser.post(
             "/ui/login", data={"email": human.email, "password": "testpass123"}
@@ -186,7 +189,7 @@ async def test_human_session_cookie_security(monkeypatch, human, app_env, secure
         assert login.status_code == 303
         page = await browser.get("/ui/groups")
         assert page.status_code == 200
-        logout = await browser.get("/ui/logout")
+        logout = await browser.post("/ui/logout")
         assert logout.status_code == 303
         assert "session" not in browser.cookies
 

@@ -132,7 +132,15 @@ async def _snapshot(discussion: dict[str, int]) -> tuple[object, ...]:
         post = await db.get(Post, discussion["post_id"])
         counts = [
             await db.scalar(select(func.count()).select_from(model))
-            for model in (Comment, PostRevision, ReadLog, AuditLog, ThreadCloseVote, CloseVoteEvent)
+            for model in (
+                Post,
+                Comment,
+                PostRevision,
+                ReadLog,
+                AuditLog,
+                ThreadCloseVote,
+                CloseVoteEvent,
+            )
         ]
         vote = (await db.execute(select(ThreadCloseVote))).scalar_one_or_none()
         assert post is not None
@@ -258,6 +266,127 @@ async def test_close_routes_require_access_to_requested_post_and_root(
 
     assert response.status_code == 403, response.text
     assert await _snapshot(discussion) == before
+
+
+def _thread_write_request(
+    route: str, target_id: int, channel_id: int
+) -> tuple[str, dict[str, str | int]]:
+    payload: dict[str, str | int] = {"body_markdown": "A deliberate thread update."}
+    if route == "comments":
+        return f"/api/posts/{target_id}/comments", payload
+    payload["subject"] = "Thread update"
+    if route == "posts":
+        payload["parent_post_id"] = target_id
+        return "/api/posts", payload
+    payload["parent_id"] = target_id
+    return f"/api/channels/{channel_id}/messages", payload
+
+
+@pytest.mark.parametrize("route", ["comments", "posts", "messages"])
+@pytest.mark.parametrize("moved_target", ["post_id", "reply_id"])
+@pytest.mark.parametrize("root_status", ["open", "closed"])
+async def test_thread_writers_require_access_to_target_and_root_before_close_state(
+    client: AsyncClient,
+    discussion: dict[str, int],
+    monkeypatch: pytest.MonkeyPatch,
+    route: str,
+    moved_target: str,
+    root_status: str,
+) -> None:
+    state = await client.get(f"/api/posts/{discussion['reply_id']}/close-state", headers=ALICE)
+    assert state.status_code == 200
+    assert state.json()["soft_closed"] is True
+    pin = f"{state.json()['head_event_kind']}:{state.json()['head_event_id']}"
+
+    # Recreate a historical split directly: #206 now prevents these moves.
+    async with TestSession() as db:
+        moved = await db.get(Post, discussion[moved_target])
+        moved.channel_id = discussion["destination_id"]
+        root = await db.get(Post, discussion["post_id"])
+        root.status = root_status
+        reply = await db.get(Post, discussion["reply_id"])
+        channel_id = reply.channel_id
+        await db.execute(delete(Membership).where(Membership.group_id == discussion["group_id"]))
+        await db.commit()
+    before = await _snapshot(discussion)
+    denied_state = await client.get(
+        f"/api/posts/{discussion['reply_id']}/close-state", headers=ALICE
+    )
+    assert denied_state.status_code == 403
+    if moved_target == "reply_id":
+        # The target itself remains readable; only root membership was lost.
+        target = await client.get(f"/api/posts/{discussion['reply_id']}/comments", headers=ALICE)
+        assert target.status_code == 200
+
+    async def unexpected_close_state(*args, **kwargs):
+        pytest.fail("Unauthorized writer computed root close state")
+
+    monkeypatch.setattr("stoa.routes.comments.get_thread_close_state", unexpected_close_state)
+    url, payload = _thread_write_request(route, discussion["reply_id"], channel_id)
+    # Even a previously valid pin must not grant access or reveal a receipt.
+    for supplied_pin in (None, "post:999999", pin):
+        headers = dict(ALICE)
+        if supplied_pin is not None:
+            headers["X-Acknowledge-Soft-Close"] = supplied_pin
+        response = await client.post(url, json=payload, headers=headers)
+        assert response.status_code == denied_state.status_code, response.text
+        assert response.json() == denied_state.json()
+        assert "head_event" not in response.text
+        assert "close_receipt" not in response.text
+        assert await _snapshot(discussion) == before
+
+
+@pytest.mark.parametrize("route", ["comments", "posts", "messages"])
+@pytest.mark.parametrize("target", ["post_id", "reply_id"])
+@pytest.mark.parametrize("soft_closed", [True, False])
+async def test_thread_writers_preserve_normal_close_contract(
+    client: AsyncClient,
+    discussion: dict[str, int],
+    route: str,
+    target: str,
+    soft_closed: bool,
+) -> None:
+    if not soft_closed:
+        response = await client.delete(
+            f"/api/posts/{discussion['post_id']}/close-votes", headers=ALICE
+        )
+        assert response.status_code == 200
+    state = await client.get(f"/api/posts/{discussion[target]}/close-state", headers=ALICE)
+    assert state.status_code == 200
+    assert state.json()["soft_closed"] is soft_closed
+    pin = f"{state.json()['head_event_kind']}:{state.json()['head_event_id']}"
+    async with TestSession() as db:
+        post = await db.get(Post, discussion[target])
+        channel_id = post.channel_id
+    url, payload = _thread_write_request(route, discussion[target], channel_id)
+    headers = dict(ALICE)
+    if soft_closed:
+        response = await client.post(url, json=payload, headers=headers)
+        assert response.status_code == 428, response.text
+        assert response.json()["detail"]["head_event"] == pin
+        response = await client.post(
+            url, json=payload, headers={**headers, "X-Acknowledge-Soft-Close": "post:999999"}
+        )
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"]["code"] == "SOFT_CLOSE_PIN_MISMATCH"
+        headers["X-Acknowledge-Soft-Close"] = pin
+
+    response = await client.post(url, json=payload, headers=headers)
+    assert response.status_code == 201, response.text
+    if route == "comments":
+        expected_receipt = (
+            {
+                "stepped_into": pin,
+                "votes_at_write": {"current": 1, "required": 1, "participants": 1},
+            }
+            if soft_closed
+            else None
+        )
+        assert response.json()["close_receipt"] == expected_receipt
+    else:
+        assert "close_receipt" not in response.json()
+    after = await client.get(f"/api/posts/{discussion[target]}/close-state", headers=ALICE)
+    assert after.json()["soft_closed"] is False
 
 
 @pytest.mark.parametrize(

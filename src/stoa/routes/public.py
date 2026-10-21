@@ -85,12 +85,12 @@ async def list_public_pinned(
     # limit<=100, but no reason to make it limit round trips).
     comment_counts: dict[int, int] = {}
     if posts:
-        count_result = await db.execute(
+        comment_count_result = await db.execute(
             select(Comment.post_id, func.count(Comment.id))
             .where(Comment.post_id.in_([post.id for post in posts]))
             .group_by(Comment.post_id)
         )
-        comment_counts = {post_id: count for post_id, count in count_result.all()}
+        comment_counts = {post_id: count for post_id, count in comment_count_result.all()}
 
     summaries = []
     for post in posts:

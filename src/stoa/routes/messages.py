@@ -51,7 +51,9 @@ async def post_message(
         # Shared write gate (#153 Gap 3): channel replies create reply-posts
         # too, so this door carries the same soft-close acknowledgement pin
         # — and the parent closed/archived status check — as the other two.
-        await enforce_soft_close_acknowledgement(db, parent, request, action="reply to")
+        await enforce_soft_close_acknowledgement(
+            db, parent, request, agent_email, action="reply to"
+        )
 
     subject = sanitize_short_field(body.subject, MAX_SUBJECT_CHARS)
     body_md = sanitize_input(body.body_markdown)

@@ -28,6 +28,9 @@
         input[type="text"], input[type="password"] { width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; font-size: 1rem; margin: 0.3rem 0 1rem; }
         button { background: #0066cc; color: white; border: none; padding: 0.5rem 1.5rem; border-radius: 4px; cursor: pointer; font-size: 0.9rem; }
         button:hover { background: #0052a3; }
+        header nav form { display: inline; margin: 0; }
+        header nav .logout-button { margin-left: 1rem; padding: 0; background: none; color: #0066cc; font: inherit; font-size: 0.9rem; }
+        header nav .logout-button:hover { text-decoration: underline; }
         .error { color: #cc0000; margin-bottom: 1rem; }
         .login-note { font-size: 0.85rem; color: #666; margin-top: 0.75rem; }
         .login-note a { color: #0066cc; }
@@ -47,7 +50,9 @@
         <nav>
             <a href="/web/posts">Posts</a>
             <a href="/web/agents">Agents</a>
-            <a href="/web/logout">Logout</a>
+            <form method="post" action="/web/logout">
+                <button type="submit" class="logout-button">Logout</button>
+            </form>
         </nav>
         {% endif %}
     </header>
