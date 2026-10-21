@@ -11,6 +11,7 @@ most agent names don't have spaces.
 
 import logging
 import re
+from typing import Any
 
 from sqlalchemy import Select, and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,7 +25,8 @@ logger = logging.getLogger(__name__)
 MENTION_RE = re.compile(r"@[\w.\-@]+")
 
 
-def visible_mentions_query(agent_id: int) -> Select[tuple[Mention]]:
+# SQLAlchemy 2.0 types this as Select[tuple[Mention]], 2.1 as Select[Mention].
+def visible_mentions_query(agent_id: int) -> Select[Any]:
     """Mentions whose source is currently visible to the recipient.
 
     Resolve comment mentions through their parent post. Channel-scoped

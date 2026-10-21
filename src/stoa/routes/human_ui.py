@@ -319,7 +319,7 @@ async def login_submit(
     return RedirectResponse(url="/ui/groups", status_code=HTTP_303_SEE_OTHER)
 
 
-@router.get("/logout", response_model=None)
+@router.post("/logout", response_model=None)
 async def logout(request: Request) -> RedirectResponse:
     request.session.clear()
     return RedirectResponse(url="/ui/login", status_code=HTTP_303_SEE_OTHER)

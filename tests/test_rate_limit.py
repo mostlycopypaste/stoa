@@ -3,6 +3,7 @@
 import time
 from unittest.mock import patch
 
+import bcrypt
 import pytest
 from fastapi import Request
 from httpx import ASGITransport, AsyncClient
@@ -17,6 +18,7 @@ from stoa.rate_limit import (
     _parse_client_ip,
     reset_limiter,
 )
+from tests.conftest import TestSession
 
 HEADERS = {"X-API-Key": "alice-key"}
 
@@ -413,6 +415,115 @@ class TestRateLimitMiddleware:
         # No rate-limit headers on admin bypass
         assert "X-RateLimit-Limit" not in response.headers
         assert "X-RateLimit-Remaining" not in response.headers
+
+
+class TestBrowserRequesterBudget:
+    @pytest.mark.parametrize(
+        ("method", "path", "expected_status"),
+        [
+            ("POST", "/web/login", 401),
+            ("GET", "/web/posts", 303),
+            ("GET", "/web/posts/1", 303),
+            ("GET", "/web/agents", 303),
+        ],
+    )
+    async def test_rotating_browser_credentials_are_limited_before_db_and_bcrypt(
+        self, client: AsyncClient, method: str, path: str, expected_status: int
+    ) -> None:
+        requester_limiter = RateLimiter(max_requests=2, window_seconds=60)
+        with (
+            patch("stoa.rate_limit._requester_limiter", requester_limiter),
+            patch("stoa.routes.web.async_session_factory", wraps=TestSession) as sessions,
+            patch("bcrypt.checkpw", wraps=bcrypt.checkpw) as checked,
+        ):
+            statuses = []
+            for i in range(4):
+                key = f"unknown-browser-key-{i}"
+                if method == "POST":
+                    response = await client.post(path, data={"api_key": key})
+                else:
+                    response = await client.get(path, headers={"Cookie": f"stoa_session={key}"})
+                statuses.append(response.status_code)
+            assert statuses == [expected_status, expected_status, 429, 429]
+            assert sessions.call_count == 2
+            assert checked.call_count == 2
+            assert len(requester_limiter._requests) == 1
+            assert response.headers["X-RequesterRateLimit-Remaining"] == "0"
+            assert response.headers["X-RateLimit-Limit"] == "2"
+            assert 0 < int(response.headers["Retry-After"]) <= 60
+
+    @pytest.mark.parametrize("browser_first", [True, False])
+    async def test_browser_and_api_share_one_requester_budget(
+        self, client: AsyncClient, browser_first: bool
+    ) -> None:
+        requester_limiter = RateLimiter(max_requests=1, window_seconds=60)
+        with (
+            patch("stoa.rate_limit._requester_limiter", requester_limiter),
+            patch("stoa.routes.web.async_session_factory", wraps=TestSession) as sessions,
+        ):
+            paths = ["/web/posts", "/api/agents/me"]
+            if not browser_first:
+                paths.reverse()
+            for i, path in enumerate(paths):
+                response = await client.get(
+                    path,
+                    headers=HEADERS
+                    if path.startswith("/api/")
+                    else {"Cookie": "stoa_session=alice-key"},
+                )
+                assert response.status_code == (200 if i == 0 else 429)
+            assert sessions.call_count == (2 if browser_first else 0)
+            # A different requester can still authenticate and browse.
+            response = await client.get(
+                "/web/posts",
+                headers={"Cookie": "stoa_session=alice-key", "Fly-Client-IP": "203.0.113.9"},
+            )
+            assert response.status_code == 200
+            assert response.headers["X-RequesterRateLimit-Remaining"] == "0"
+
+    async def test_login_and_cookie_browsing_consume_one_allowance_per_request(
+        self, client: AsyncClient
+    ) -> None:
+        client.base_url = "https://test"
+        requester_limiter = RateLimiter(max_requests=4, window_seconds=60)
+        with (
+            patch("stoa.rate_limit._requester_limiter", requester_limiter),
+            patch("stoa.routes.web.async_session_factory", TestSession),
+        ):
+            response = await client.post("/web/login", data={"api_key": "alice-key"})
+            assert response.status_code == 303
+            assert client.cookies["stoa_session"] == "alice-key"
+            assert response.headers["X-RequesterRateLimit-Remaining"] == "3"
+            for remaining, path, status in (
+                (2, "/web/posts", 200),
+                (1, "/web/agents", 200),
+                (0, "/web/posts/999999", 404),
+            ):
+                response = await client.get(path)
+                assert response.status_code == status
+                assert response.headers["X-RequesterRateLimit-Remaining"] == str(remaining)
+            assert (await client.get("/web/posts")).status_code == 429
+
+    @pytest.mark.parametrize(
+        ("path", "cookie", "status"),
+        [
+            ("/web/login", "", 200),
+            ("/web/posts", "", 303),
+            ("/web/posts", "stoa_session=", 303),
+            ("/web/posts", "unrelated=value", 303),
+            ("/health", "stoa_session=unknown-key", 200),
+            ("/website", "stoa_session=unknown-key", 404),
+        ],
+    )
+    async def test_requests_without_browser_auth_work_do_not_consume_budget(
+        self, client: AsyncClient, path: str, cookie: str, status: int
+    ) -> None:
+        requester_limiter = RateLimiter(max_requests=0, window_seconds=60)
+        with patch("stoa.rate_limit._requester_limiter", requester_limiter):
+            response = await client.get(path, headers={"Cookie": cookie})
+            assert response.status_code == status
+            assert "X-RequesterRateLimit-Limit" not in response.headers
+            assert not requester_limiter._requests
 
 
 class TestAdminBypassScope:

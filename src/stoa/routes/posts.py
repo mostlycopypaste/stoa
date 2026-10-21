@@ -122,7 +122,9 @@ async def create_post(
         # Shared write gate (#153 Gap 2): reply-posts are how threads mostly
         # grow (#84), so this door carries the same soft-close acknowledgement
         # pin — and the parent closed/archived status check — as comments.
-        await enforce_soft_close_acknowledgement(db, parent, request, action="reply to")
+        await enforce_soft_close_acknowledgement(
+            db, parent, request, agent_email, action="reply to"
+        )
 
     # Require or inherit a channel (issue #168). An explicit value is
     # validated for existence and membership so the generic endpoint stays
