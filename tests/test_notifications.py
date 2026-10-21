@@ -847,7 +847,7 @@ class TestNotificationFailureDoesNotBlock:
             raise RuntimeError("Notification system down")
 
         monkeypatch.setattr(
-            "stoa.routes.comments.notify_comment",
+            "stoa.services.notifications.get_comment_recipients",
             failing_notify,
         )
 
@@ -870,7 +870,7 @@ class TestNotificationFailureDoesNotBlock:
             raise RuntimeError("Notification system down")
 
         monkeypatch.setattr(
-            "stoa.routes.posts.notify_new_post",
+            "stoa.services.notifications.get_new_post_recipients",
             failing_notify,
         )
 

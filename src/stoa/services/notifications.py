@@ -6,8 +6,7 @@ email notifications via the existing ``send_email`` integration.
 Design:
 - ``get_comment_recipients`` — who to notify when a comment is posted
 - ``get_new_post_recipients`` — who to notify when a post is created in a channel
-- ``notify_comment`` — send notifications for a new comment (best-effort)
-- ``notify_new_post`` — send notifications for a new post (best-effort)
+- ``dispatch_post_notification`` — deliver after commit with independent sessions
 
 Notifications are best-effort: any send failure is logged and swallowed so
 the originating request (post/comment creation) is never blocked.
@@ -20,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.config import settings
+from stoa.database import async_session_factory
 from stoa.email import send_email
 from stoa.models import (
     Agent,
@@ -366,37 +366,38 @@ async def _send_notifications(
         )
 
 
-async def notify_comment(
-    db: AsyncSession,
-    post: Post,
-    comment: Comment,
-    comment_author: str,
-) -> None:
-    """Send notifications for a new comment (best-effort, never raises).
+async def dispatch_post_notification(post_id: int, comment_id: int | None = None) -> None:
+    """Deliver after the creating transaction commits, using only persisted IDs.
 
-    Called from ``create_comment`` after the comment is flushed. Any
-    failure is logged and swallowed so the comment creation is never
-    blocked.
+    Re-read the content and current recipient access in a fresh session. Close
+    that session before external I/O so a slow email batch holds neither the
+    writer's post lock nor a checked-out connection. Audit delivery separately;
+    any notification or audit failure cannot undo the committed content.
+
+    Delivery remains best-effort: this in-process background task is not a
+    durable queue and is not retried after process termination.
     """
     try:
-        recipients = await get_comment_recipients(db, post, comment, comment_author)
-        await _send_notifications(db, recipients, post, comment, comment_author)
+        async with async_session_factory() as db:
+            post = await db.get(Post, post_id)
+            if post is None or post.status == "deleted":
+                return
+            comment = None
+            if comment_id is not None:
+                comment = await db.get(Comment, comment_id)
+                if comment is None or comment.post_id != post_id:
+                    return
+                author = comment.author
+                recipients = await get_comment_recipients(db, post, comment, author)
+            else:
+                author = post.author
+                recipients = await get_new_post_recipients(db, post, author)
+
+        # The loaded scalar attributes remain available on these detached
+        # objects. This new session checks out a connection only to save the
+        # audit after _send_notifications finishes its external requests.
+        async with async_session_factory() as audit_db:
+            await _send_notifications(audit_db, recipients, post, comment, author)
+            await audit_db.commit()
     except Exception:
-        logger.exception("notify_comment failed for post %s", post.id)
-
-
-async def notify_new_post(
-    db: AsyncSession,
-    post: Post,
-    post_author: str,
-) -> None:
-    """Send notifications for a new post (best-effort, never raises).
-
-    Called from ``create_post`` after the post is flushed. Any failure
-    is logged and swallowed so the post creation is never blocked.
-    """
-    try:
-        recipients = await get_new_post_recipients(db, post, post_author)
-        await _send_notifications(db, recipients, post, None, post_author)
-    except Exception:
-        logger.exception("notify_new_post failed for post %s", post.id)
+        logger.exception("Post notification dispatch failed for post %s", post_id)

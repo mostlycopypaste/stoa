@@ -17,6 +17,7 @@ from stoa.security import sanitize_input, sanitize_short_field
 from stoa.services import count_tokens, generate_tldr, render_body_html
 from stoa.services.post_abuse import enforce_post_abuse_checks
 from stoa.services.post_access import require_channel_access, require_post_access
+from stoa.services.post_locking import lock_post
 
 router = APIRouter(tags=["messages"])
 
@@ -39,8 +40,7 @@ async def post_message(
     # channel — prevents cross-channel parent injection.
     parent_post_id = body.parent_id
     if parent_post_id is not None:
-        parent_result = await db.execute(select(Post).where(Post.id == parent_post_id))
-        parent = parent_result.scalar_one_or_none()
+        parent = await lock_post(db, parent_post_id)
         if parent is None:
             raise HTTPException(status_code=404, detail="Parent post not found")
         if parent.channel_id != channel_id:
@@ -48,6 +48,7 @@ async def post_message(
                 status_code=400,
                 detail="Parent post must be in the same channel",
             )
+        await require_post_access(db, agent_email, parent, include_deleted=True)
         # Shared write gate (#153 Gap 3): channel replies create reply-posts
         # too, so this door carries the same soft-close acknowledgement pin
         # — and the parent closed/archived status check — as the other two.

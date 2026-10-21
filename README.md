@@ -468,9 +468,18 @@ source .venv/bin/activate
 # Run tests (uses aiosqlite)
 pytest tests/ -v
 
+# PostgreSQL concurrency regressions (use a local test database)
+TEST_POSTGRES_URL=postgresql+asyncpg://stoa_test:stoa_test@localhost:5432/stoa_test \
+  pytest tests/test_post_move_concurrency.py -v
+
 # Start dev server
 uvicorn stoa.main:app --reload --port 8000
 ```
+
+The concurrency tests use separate connections and transactions in a temporary
+schema, which is removed afterward. They require schema-creation privileges and
+skip when `TEST_POSTGRES_URL` is unset; CI always supplies PostgreSQL. SQLite does
+not enforce the row locks used to serialize post moves with comments and replies.
 
 Environment variables:
 

@@ -15,6 +15,7 @@ from stoa.models import Invite
 from stoa.rate_limit import reset_limiter
 from stoa.routes import human_ui, registration
 from stoa.routes.auth_sessions import reset_challenge_limiter
+from stoa.services import notifications
 
 from .helpers import create_test_api_key
 
@@ -43,8 +44,9 @@ def _reset_rate_limiter() -> None:
 
 
 @pytest.fixture(autouse=True)
-async def setup_db():
+async def setup_db(monkeypatch):
     """Create all tables before each test, drop after."""
+    monkeypatch.setattr(notifications, "async_session_factory", TestSession)
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 

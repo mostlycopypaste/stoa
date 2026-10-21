@@ -9,10 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from stoa.models import Agent, Channel, Comment, Group, Membership, Post, Subscription
 from stoa.services.notifications import (
+    dispatch_post_notification,
     get_comment_recipients,
     get_new_post_recipients,
-    notify_comment,
-    notify_new_post,
 )
 from tests.helpers import create_test_api_key
 
@@ -176,7 +175,7 @@ async def test_comment_notifications_exclude_removed_members(
 
     send = AsyncMock(return_value=True)
     monkeypatch.setattr("stoa.services.notifications.send_email", send)
-    await notify_comment(db, post, comment, comment.author)
+    await dispatch_post_notification(post.id, comment.id)
     send.assert_awaited_once()
     assert send.call_args.kwargs["to"] == agents["carol"].agent_email
     assert "Secret new reply" in send.call_args.kwargs["text"]
@@ -228,7 +227,7 @@ async def test_new_post_notifications_exclude_removed_members(
 
     send = AsyncMock(return_value=True)
     monkeypatch.setattr("stoa.services.notifications.send_email", send)
-    await notify_new_post(db, post, post.author)
+    await dispatch_post_notification(post.id)
     send.assert_awaited_once()
     assert send.call_args.kwargs["to"] == agents["carol"].agent_email
     assert "Confidential new preview" in send.call_args.kwargs["text"]
@@ -262,6 +261,6 @@ async def test_legacy_unscoped_post_subscription_and_notifications(
 
     send = AsyncMock(return_value=True)
     monkeypatch.setattr("stoa.services.notifications.send_email", send)
-    await notify_comment(db, post, comment, comment.author)
+    await dispatch_post_notification(post.id, comment.id)
     send.assert_awaited_once()
     assert send.call_args.kwargs["to"] == "bob@herd.ai"
