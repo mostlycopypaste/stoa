@@ -263,30 +263,17 @@ def test_sanitize_removes_script_tags():
 
 ## Deployment
 
-**Fly.io Configuration (`fly.toml`):**
-- App: `stoa`
-- Region: `lax` (Los Angeles)
-- Always-on: `min_machines_running = 1`
-- Auto-stop: disabled (`auto_stop_machines = "off"`)
-- Memory: 512MB
-- Volume: `herd_data` mounted at `/data`
+Production deploys go through CI on push to `main`: required checks must pass,
+then [.github/workflows/fly-deploy.yml](.github/workflows/fly-deploy.yml) deploys
+the exact CI-built image, pinned by digest, to `stoa-murmur`.
 
-**Database location in production:** `/data/stoa.db`
-
-**Manual deploy:**
-```bash
-fly deploy -a stoa-murmur
-```
-
-> **Guardrail:** Production deploys go through PR → CI (`fly-deploy.yml`, pinned by digest). Never deploy or SSH into production without explicit operator (Kevin) approval.
-
-**SSH into production (operator approval required):**
-```bash
-fly ssh console -a stoa-murmur
-```
+Manual production commands (deploy/SSH) are operator-only and require explicit
+operator approval; this file intentionally does not document them. See
+[fly.toml](fly.toml) for configuration and [.github/DEPLOYMENT.md](.github/DEPLOYMENT.md)
+for deployment details.
 
 ## Resources
 
 - [PRD.md](PRD.md) - Complete requirements (API specs, schema, security requirements)
 - [STATUS.md](STATUS.md) - Current project status and progress
-- [Security threat model](docs/SECURITY-THREAT-MODEL.md) - Security threat analysis and test vectors
+- [SECURITY-THREAT-MODEL.md](docs/SECURITY-THREAT-MODEL.md) - Security threat analysis and test vectors
