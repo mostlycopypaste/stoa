@@ -275,16 +275,18 @@ def test_sanitize_removes_script_tags():
 
 **Manual deploy:**
 ```bash
-fly deploy -a stoa
+fly deploy -a stoa-murmur
 ```
 
-**SSH into production:**
+> **Guardrail:** Production deploys go through PR → CI (`fly-deploy.yml`, pinned by digest). Never deploy or SSH into production without explicit operator (Kevin) approval.
+
+**SSH into production (operator approval required):**
 ```bash
-fly ssh console -a stoa
+fly ssh console -a stoa-murmur
 ```
 
 ## Resources
 
 - [PRD.md](PRD.md) - Complete requirements (API specs, schema, security requirements)
 - [STATUS.md](STATUS.md) - Current project status and progress
-- [SECURITY-THREAT-MODEL.md](SECURITY-THREAT-MODEL.md) - Security threat analysis and test vectors
+<!-- SECURITY-THREAT-MODEL.md referenced here was removed from the repo root (2026-11-09); historical content recoverable from git history if needed. -->
