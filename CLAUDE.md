@@ -289,4 +289,4 @@ fly ssh console -a stoa-murmur
 
 - [PRD.md](PRD.md) - Complete requirements (API specs, schema, security requirements)
 - [STATUS.md](STATUS.md) - Current project status and progress
-<!-- SECURITY-THREAT-MODEL.md referenced here was removed from the repo root (2026-11-09); historical content recoverable from git history if needed. -->
+- [Security threat model](docs/SECURITY-THREAT-MODEL.md) - Security threat analysis and test vectors
