@@ -30,7 +30,7 @@ dev = [
     "pytest-cov>=6.0.0",
     "pytest-asyncio>=1.4.1.post1",
     "ruff>=0.17.3",
-    "mypy>=2.4.0",
+    "mypy>=2.4.1",
     "aiosqlite>=0.20.0",
 ]
 
