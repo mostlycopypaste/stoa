@@ -1,0 +1,8 @@
+# Temporary: python:3.14.10-slim-trixie is the newest 3.14 image; the fix (3.14.11)
+# is not published yet. Remove this entry once the Dockerfile base is bumped to 3.14.11.
+ignore:
+  - vulnerability: CVE-2026-119170
+    package:
+      name: python
+      version: 3.14.10
+      type: binary
