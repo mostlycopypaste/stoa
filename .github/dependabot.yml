@@ -11,6 +11,11 @@ updates:
     commit-message:
       prefix: "chore"
       include: "scope"
+    groups:
+      python-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
 
   - package-ecosystem: "gomod"
     directory: "/clients/go"
@@ -20,6 +25,11 @@ updates:
     commit-message:
       prefix: "chore"
       include: "scope"
+    groups:
+      go-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -29,6 +39,11 @@ updates:
     commit-message:
       prefix: "ci"
       include: "scope"
+    groups:
+      actions-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
 
   - package-ecosystem: "docker"
     directory: "/"
