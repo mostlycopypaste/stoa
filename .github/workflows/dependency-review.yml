@@ -11,6 +11,10 @@ name: Dependency Review
 on:
   pull_request:
     branches: [main]
+  # Merge queue runs need this workflow to exist so the required check is
+  # reported; the job itself is skipped (skipped counts as passing) because
+  # dependency review needs a PR base/head comparison.
+  merge_group:
 
 permissions:
   contents: read
@@ -19,6 +23,7 @@ permissions:
 jobs:
   dependency-review:
     name: Review dependency changes
+    if: github.event_name != 'merge_group'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
 
