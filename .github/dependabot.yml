@@ -53,3 +53,9 @@ updates:
     commit-message:
       prefix: "chore"
       include: "scope"
+    # Python minor/major upgrades require a deliberate change alongside CI matrix updates.
+    ignore:
+      - dependency-name: "python"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
