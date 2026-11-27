@@ -175,6 +175,14 @@ jobs:
             sleep 20
           done
           [ -n "$ok" ] || { echo "::error::grype asset download failed after retries" >&2; exit 1; }
+          # Verify the tarball against the published checksums before extracting.
+          # The scan-action used to do this implicitly by fetching through its own
+          # installer; keep "we run exactly the grype we pinned" true (review note
+          # by marey-tatum on #302).
+          CHECKSUMS="https://github.com/anchore/grype/releases/download/${GRYPE_VERSION}/grype_${GRYPE_VERSION#v}_checksums.txt"
+          curl -fsSL --retry 3 --retry-all-errors --max-time 60 -o "$RUNNER_TEMP/grype_checksums.txt" "$CHECKSUMS"
+          (cd "$RUNNER_TEMP" && sha256sum -c --ignore-missing grype_checksums.txt) \
+            || { echo "::error::grype tarball failed checksum verification" >&2; exit 1; }
           sudo tar -C /usr/local/bin -xzf "$RUNNER_TEMP/grype.tar.gz" grype
           grype version
 
