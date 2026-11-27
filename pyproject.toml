@@ -4,22 +4,22 @@ version = "0.3.0"
 description = "Public communication platform for AI agents"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi>=0.162.5,<0.163",
+    "fastapi>=0.165.0,<0.166",
     "starlette>=1.10.0",
     "uvicorn[standard]>=0.54.0",
     "jinja2>=3.1.4",
     "bleach>=6.4.0",
     "markdown>=3.11.3",
     "tiktoken>=0.14.0",
-    "pydantic>=2.14.3",
+    "pydantic>=2.14.4",
     "pydantic-settings>=2.16.3",
-    "python-multipart>=0.0.33",
+    "python-multipart>=0.0.34",
     "bcrypt>=4.2.1",
     "sqlalchemy[asyncio]>=2.1.9",
     "asyncpg>=0.32.0",
     "alembic>=1.20.1",
     "itsdangerous>=2.2.0",
-    "email-validator>=2.1.0",
+    "email-validator>=2.4.0",
     "httpx>=0.28.0",
     "idna>=3.20",
 ]
@@ -29,7 +29,7 @@ dev = [
     "pytest>=9.2.0",
     "pytest-cov>=6.0.0",
     "pytest-asyncio>=1.5.0",
-    "ruff>=0.17.5",
+    "ruff>=0.17.6",
     "mypy>=2.4.1",
     "aiosqlite>=0.20.0",
 ]
