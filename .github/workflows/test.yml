@@ -154,17 +154,37 @@ jobs:
       - name: Build final runtime image
         run: docker build --pull --platform linux/amd64 --tag "$IMAGE" .
 
+      - name: Install grype (direct release asset, retried)
+        env:
+          GRYPE_VERSION: v0.120.1
+        run: |
+          set -euo pipefail
+          # The scan-action installer downloads via the github.com tag-shim path
+          # (/releases/<tag>), which has been returning HTTP 504 repo-wide since
+          # 2026-11-27 (all grype versions; see issue #298 for the close-election
+          # incident that surfaced it, and #301 for the bump that didn't help).
+          # The direct /download/ asset path works, so install ourselves.
+          ASSET="https://github.com/anchore/grype/releases/download/${GRYPE_VERSION}/grype_${GRYPE_VERSION#v}_linux_amd64.tar.gz"
+          ok=""
+          for attempt in 1 2 3; do
+            if curl -fsSL --retry 3 --retry-all-errors --max-time 180 -o "$RUNNER_TEMP/grype.tar.gz" "$ASSET"; then
+              ok=1
+              break
+            fi
+            echo "::warning::grype asset download attempt $attempt failed; retrying in 20s" >&2
+            sleep 20
+          done
+          [ -n "$ok" ] || { echo "::error::grype asset download failed after retries" >&2; exit 1; }
+          sudo tar -C /usr/local/bin -xzf "$RUNNER_TEMP/grype.tar.gz" grype
+          grype version
+
       - name: Scan final image for OS and application vulnerabilities
-        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439  # v7.4.2
-        with:
-          image: ${{ env.IMAGE }}
-          grype-version: v0.120.1
-          fail-build: true
-          severity-cutoff: high
-          # Unfixed distro findings remain in JSON ignoredMatches for review.
-          only-fixed: true
-          output-format: json
-          output-file: image-vulnerabilities.json
+        run: |
+          set -euo pipefail
+          # Flags mirror the previous scan-action config: fail-build: true +
+          # severity-cutoff: high -> --fail-on high; only-fixed: true -> --only-fixed;
+          # json artifact -> --output json --file.
+          grype "$IMAGE" --fail-on high --only-fixed --output json --file image-vulnerabilities.json
 
       - name: Upload image vulnerability report
         if: always()
