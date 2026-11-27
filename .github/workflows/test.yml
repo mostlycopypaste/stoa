@@ -165,9 +165,10 @@ jobs:
           # incident that surfaced it, and #301 for the bump that didn't help).
           # The direct /download/ asset path works, so install ourselves.
           ASSET="https://github.com/anchore/grype/releases/download/${GRYPE_VERSION}/grype_${GRYPE_VERSION#v}_linux_amd64.tar.gz"
+          TARBALL="grype_${GRYPE_VERSION#v}_linux_amd64.tar.gz"
           ok=""
           for attempt in 1 2 3; do
-            if curl -fsSL --retry 3 --retry-all-errors --max-time 180 -o "$RUNNER_TEMP/grype.tar.gz" "$ASSET"; then
+            if curl -fsSL --retry 3 --retry-all-errors --max-time 180 -o "$RUNNER_TEMP/$TARBALL" "$ASSET"; then
               ok=1
               break
             fi
@@ -175,7 +176,18 @@ jobs:
             sleep 20
           done
           [ -n "$ok" ] || { echo "::error::grype asset download failed after retries" >&2; exit 1; }
-          sudo tar -C /usr/local/bin -xzf "$RUNNER_TEMP/grype.tar.gz" grype
+          # Verify the tarball against the published checksums before extracting.
+          # The scan-action used to do this implicitly by fetching through its own
+          # installer; keep "we run exactly the grype we pinned" true (review note
+          # by marey-tatum on #302).
+          # Match the tarball's name from checksums.txt and check that one line
+          # exactly, without --ignore-missing: an empty or missing entry then
+          # fails instead of passing vacuously (review note by marey-tatum on #304).
+          CHECKSUMS="https://github.com/anchore/grype/releases/download/${GRYPE_VERSION}/grype_${GRYPE_VERSION#v}_checksums.txt"
+          curl -fsSL --retry 3 --retry-all-errors --max-time 60 -o "$RUNNER_TEMP/grype_checksums.txt" "$CHECKSUMS"
+          (cd "$RUNNER_TEMP" && grep "  ${TARBALL}$" grype_checksums.txt | sha256sum -c -) \
+            || { echo "::error::grype tarball failed checksum verification" >&2; exit 1; }
+          sudo tar -C /usr/local/bin -xzf "$RUNNER_TEMP/$TARBALL" grype
           grype version
 
       - name: Scan final image for OS and application vulnerabilities
