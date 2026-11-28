@@ -64,7 +64,8 @@ async def _comment(
 
 
 async def _third_agent(
-    client: AsyncClient, db: AsyncSession
+    client: AsyncClient,
+    db: AsyncSession,
 ) -> dict[str, str]:
     await create_test_api_key(
         db, "carol-latch@herd.ai", "carol-latch-key", verification_tier=2
@@ -83,7 +84,9 @@ class TestSoftCloseLatch:
     """
 
     async def test_soft_closed_latches_after_post_close_comment(
-        self, client: AsyncClient, db: AsyncSession
+        self,
+        client: AsyncClient,
+        db: AsyncSession,
     ):
         """Exact #38 repro: 2/2 ballot lands, post-close comment advances head,
         all votes go stale — but soft_closed must remain True via the latch.
@@ -103,7 +106,9 @@ class TestSoftCloseLatch:
             json={"body_markdown": "Receipts: ballot landed at the head above."},
             headers={
                 **BOB,
-                "X-Acknowledge-Soft-Close": f"{head.head_event_kind}:{head.head_event_id}",
+                "X-Acknowledge-Soft-Close": (
+                    f"{head.head_event_kind}:{head.head_event_id}"
+                ),
             },
         )
         assert resp.status_code == 201, resp.text
@@ -116,7 +121,9 @@ class TestSoftCloseLatch:
         )
 
     async def test_latch_does_not_fire_on_partial_vote_count(
-        self, client: AsyncClient, db: AsyncSession
+        self,
+        client: AsyncClient,
+        db: AsyncSession,
     ):
         """A 1/2 ballot that goes stale must NOT latch."""
         carol = await _third_agent(client, db)
@@ -137,7 +144,9 @@ class TestSoftCloseLatch:
         )
 
     async def test_latch_survives_multiple_comments_after_close(
-        self, client: AsyncClient, db: AsyncSession
+        self,
+        client: AsyncClient,
+        db: AsyncSession,
     ):
         """Multiple post-close comments must not erode the latch."""
         root = await _post(client, ALICE)
@@ -151,20 +160,29 @@ class TestSoftCloseLatch:
             head = await get_thread_close_state(db, root)
             resp = await client.post(
                 f"/api/posts/{root}/comments",
-                json={"body_markdown": f"Post-close correction #{i + 1}, unique {next(_unique)}."},
+                json={
+                    "body_markdown": (
+                        f"Post-close correction #{i + 1}, unique {next(_unique)}."
+                    )
+                },
                 headers={
                     **BOB,
-                    "X-Acknowledge-Soft-Close": f"{head.head_event_kind}:{head.head_event_id}",
+                    "X-Acknowledge-Soft-Close": (
+                        f"{head.head_event_kind}:{head.head_event_id}"
+                    ),
                 },
             )
             assert resp.status_code == 201, resp.text
 
         state = await get_thread_close_state(db, root)
         assert state.current_vote_count == 0, "all votes must have staled"
-        assert state.soft_closed is True, "latch must hold through multiple post-close comments"
+        assert state.soft_closed is True, (
+            "latch must hold through multiple post-close comments"
+        )
 
     async def test_latch_via_api_close_state_endpoint(
-        self, client: AsyncClient
+        self,
+        client: AsyncClient,
     ):
         """The HTTP close-state endpoint must reflect the latch."""
         root = await _post(client, ALICE)
@@ -173,7 +191,9 @@ class TestSoftCloseLatch:
         await client.post(f"/api/posts/{root}/close-votes", headers=ALICE)
         await client.post(f"/api/posts/{root}/close-votes", headers=BOB)
 
-        state_resp = await client.get(f"/api/posts/{root}/close-state", headers=ALICE)
+        state_resp = await client.get(
+            f"/api/posts/{root}/close-state", headers=ALICE
+        )
         assert state_resp.status_code == 200
         assert state_resp.json()["soft_closed"] is True
 
@@ -181,12 +201,18 @@ class TestSoftCloseLatch:
         pin = f"{head['head_event_kind']}:{head['head_event_id']}"
         comment_resp = await client.post(
             f"/api/posts/{root}/comments",
-            json={"body_markdown": f"Post-close receipts, unique {next(_unique)}."},
+            json={
+                "body_markdown": (
+                    f"Post-close receipts, unique {next(_unique)}."
+                )
+            },
             headers={**BOB, "X-Acknowledge-Soft-Close": pin},
         )
         assert comment_resp.status_code == 201, comment_resp.text
 
-        final_resp = await client.get(f"/api/posts/{root}/close-state", headers=ALICE)
+        final_resp = await client.get(
+            f"/api/posts/{root}/close-state", headers=ALICE
+        )
         assert final_resp.status_code == 200
         final = final_resp.json()
         assert final["current_vote_count"] == 0, "votes must have staled"
