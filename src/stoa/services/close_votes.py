@@ -26,6 +26,7 @@ It is not, and must never be rendered as, a claim that the voter read it.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -395,6 +396,54 @@ async def thread_vote_history(db: AsyncSession, root_post_id: int) -> list[VoteH
     ]
 
 
+async def _was_ever_soft_closed(
+    db: AsyncSession,
+    root_post_id: int,
+    required: int,
+) -> bool:
+    """Return True if close_vote_events history shows threshold was ever reached.
+
+    Scans the append-only event log and reconstructs the peak concurrent-vote
+    count at each distinct head pin. A head (kind, id) pair is "closed" when
+    the number of distinct voters whose last recorded action at that head was
+    cast or recast (not retract) reaches ``required``.
+
+    This is the latch for issue #298: once a ballot validly closed, later
+    comments that advance the thread head and stale the current-position rows
+    should not reopen it. We detect the prior closure from the immutable event
+    trail rather than from the mutable current-position table.
+
+    Called only when ``current_count < required`` to avoid the extra query on
+    the common path.
+    """
+    if required <= 0:
+        return False
+
+    event_result = await db.execute(
+        select(CloseVoteEvent)
+        .where(
+            CloseVoteEvent.root_post_id == root_post_id,
+            CloseVoteEvent.action.in_([CLOSE_VOTE_EVENT_CAST, CLOSE_VOTE_EVENT_RECAST]),
+            CloseVoteEvent.as_of_event_kind.is_not(None),
+            CloseVoteEvent.as_of_event_id.is_not(None),
+        )
+        .order_by(CloseVoteEvent.occurred_at, CloseVoteEvent.id)
+    )
+    cast_events = event_result.scalars().all()
+
+    # For each (head_kind, head_id) pin, track the latest cast/recast per voter.
+    # A voter counts toward that head only if their last action was cast/recast
+    # (retract events are excluded by the query above, so the last-seen action
+    # per voter per head is always a cast or recast — which is what we want).
+    # Group by head pin and count distinct voters.
+    head_voters: dict[tuple[str, int], set[str]] = defaultdict(set)
+    for ev in cast_events:
+        pin = (ev.as_of_event_kind, ev.as_of_event_id)
+        head_voters[pin].add(ev.voter)
+
+    return any(len(voters) >= required for voters in head_voters.values())
+
+
 async def get_thread_close_state(db: AsyncSession, root_post_id: int) -> ThreadCloseState:
     """Compute soft-close state for a thread.
 
@@ -402,6 +451,11 @@ async def get_thread_close_state(db: AsyncSession, root_post_id: int) -> ThreadC
     are still reported — the count does not vanish, it becomes visibly about an
     older thread ("3 votes, all before #72"). Soft-close therefore lifts on its
     own as the thread grows; nobody declares the thread reopened.
+
+    ``soft_closed`` is **latched**: once a ballot reaches threshold it stays
+    True even if subsequent comments advance the head and stale the recorded
+    votes. The latch is derived from the append-only ``close_vote_events``
+    history (issue #298) so no schema change is required.
     """
     participants = await thread_participants(db, root_post_id)
     head_kind, head_id, head_at = await _head_event(db, root_post_id)
@@ -429,13 +483,20 @@ async def get_thread_close_state(db: AsyncSession, root_post_id: int) -> ThreadC
     current_count = sum(1 for v in views if v.is_current)
     required = votes_required(len(participants))
 
+    # Latch: threshold reached now, or was reached at any prior head (issue #298).
+    currently_closed = len(participants) > 0 and current_count >= required
+    soft_closed = currently_closed or (
+        len(participants) > 0
+        and await _was_ever_soft_closed(db, root_post_id, required)
+    )
+
     return ThreadCloseState(
         root_post_id=root_post_id,
         participant_count=len(participants),
         votes_required=required,
         current_vote_count=current_count,
         stale_vote_count=len(views) - current_count,
-        soft_closed=len(participants) > 0 and current_count >= required,
+        soft_closed=soft_closed,
         head_event_kind=head_kind,
         head_event_id=head_id,
         votes=views,
