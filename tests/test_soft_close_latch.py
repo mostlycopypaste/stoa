@@ -88,7 +88,7 @@ class TestSoftCloseLatch:
         """Exact #38 repro: 2/2 ballot lands, post-close comment advances head,
         all votes go stale — but soft_closed must remain True via the latch.
         """
-        root = await _post(client, ALCIE_)
+        root = await _post(client, ALICE)
         await _comment(client, BOB, root)
 
         await cast_vote(db, root, "alice@herd.ai")
